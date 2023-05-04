@@ -1,0 +1,2 @@
+horovod>=0.27
+--no-binary=horovod
