@@ -1,13 +1,13 @@
 import argparse
 
 from ..training import Trainer
-from ..experiments import rotating_mnist
+from ..experiments import mnist
 
 def parse_args():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(help='Experiment to run')
     subparsers.required=True
-    rotating_mnist.add_parser(subparsers)
+    mnist.add_parser(subparsers)
 
     args = parser.parse_args()
     create_config_fn = args.create_config
