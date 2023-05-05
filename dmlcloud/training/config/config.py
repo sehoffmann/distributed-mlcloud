@@ -1,13 +1,7 @@
 import argparse
 
 from .meta import MetaConfig
-from .scheduler import SchedulerConfig
-from .model import ModelConfig
-from .dataset import DatasetConfig
-from .loss import LossConfig
 from .training import TrainingConfig
-from .optimizer import OptimizerConfig
-from .forward import ForwardConfig
 
 class BaseConfig:
 
@@ -68,9 +62,3 @@ class DefaultConfig(BaseConfig):
     def _setup_sub_configs(self):
         self.set_sub_config('meta', MetaConfig)
         self.set_sub_config('training', TrainingConfig)
-        self.set_sub_config('model', ModelConfig)
-        self.set_sub_config('optimizer', OptimizerConfig)
-        self.set_sub_config('scheduler', SchedulerConfig)
-        self.set_sub_config('loss', LossConfig)
-        self.set_sub_config('dataset', DatasetConfig)
-        self.set_sub_config('forward', ForwardConfig)

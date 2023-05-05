@@ -2,6 +2,8 @@ import logging
 from contextlib import nullcontext
 from datetime import datetime, timedelta
 import sys
+import random
+import os
 
 import torch
 from torch.cuda.amp import GradScaler, autocast
@@ -15,7 +17,7 @@ from .checkpoint import config_consistency_check, create_project_dir, find_old_c
 from ..util import is_wandb_initialized, set_wandb_startup_timeout, hvd_allreduce
 
 
-class Trainer:
+class BaseTrainer:
 
     def __init__(self, config):
         self.cfg = config
@@ -27,6 +29,8 @@ class Trainer:
 
 
     def setup_all(self):
+        setup_horovod()
+        self.seed()
         self.setup_general()
         self.setup_model_dir()
         self.setup_wandb()
@@ -39,9 +43,7 @@ class Trainer:
         hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
 
 
-    def setup_general(self):
-        setup_horovod()
-        
+    def setup_general(self):        
         if torch.cuda.is_available():
             self.device = torch.device('cuda', hvd.local_rank())
         else:
@@ -52,6 +54,16 @@ class Trainer:
         setup_logging()
         log_diagnostics(self.device)
         log_config(self.cfg)
+
+    def seed(self):
+        if self.cfg.seed is None:
+            seed = int.from_bytes(random.randbytes(4), byteorder='little')
+            self.cfg.seed = hvd.broadcast_object(seed)
+
+        np.random.seed(self.cfg.seed)
+        random.seed(self.cfg.seed)
+        torch.manual_seed(self.cfg.seed)
+        torch.cuda.manual_seed(self.cfg.seed)
 
 
     def setup_model_dir(self):
@@ -82,32 +94,29 @@ class Trainer:
         )
 
 
-    def setup_dataset(self):
-        create_fn = self.cfg.dataset_fn
-        self.train_dl, self.val_dl = create_fn(self.cfg, **self.cfg.dataset_kwargs)
+    def create_dataset(self):
+        raise NotImplementedError()
 
+    def setup_dataset(self):
+        self.train_dl, self.val_dl = self.create_dataset()
+
+    def create_model(self):
+        raise NotImplementedError()
 
     def setup_model(self):
-        create_fn = self.cfg.model_fn
-        self.model = create_fn(self.cfg, **self.cfg.model_kwargs)
+        self.model = self.create_model().to(self.device)
 
+    def create_loss(self):
+        raise NotImplementedError()
 
     def setup_loss(self):
-        create_fn = self.cfg.loss_fn
-        self.loss_fn = create_fn(self.cfg, **self.cfg.loss_kwargs)
-
-
-    def create_base_optimizer(self, params, lr):
-        create_fn = self.cfg.optimizer_fn
-        return create_fn(self.cfg, params, lr, **self.cfg.optimizer_kwargs)
-
+        self.loss_fn = self.create_loss()
 
     def create_scheduler(self):
-        if self.cfg.scheduler_fn:
-            return self.cfg.scheduler_fn(self.cfg, self.optimizer, **self.cfg.scheduler_kwargs)
-        else:
-            return None
+        return None
 
+    def create_optimizer(self, params, lr):
+        raise NotImplementedError()
 
     def setup_optimizer(self):
         lr = self.cfg.init_lr * (self.cfg.batch_size / 32.0)
@@ -121,7 +130,7 @@ class Trainer:
         
         logging.info(f'LR: {self.cfg.init_lr:.1e},  Scaled: {lr:.1e}')
 
-        optimizer = self.create_base_optimizer(self.model.parameters(), lr)
+        optimizer = self.create_optimizer(self.model.parameters(), lr)
         self.optimizer = hvd.DistributedOptimizer(
             optimizer,
             named_parameters=self.model.named_parameters(), 
@@ -227,8 +236,8 @@ class Trainer:
                 wandb.run.summary['best/val_loss'] = self.val_losses[-1]
 
 
-    def forward_step(self, model, batch):
-        return self.cfg.forward_fn(self, model, batch, **self.cfg.forward_kwargs)
+    def forward_step(self, batch):
+        raise NotImplementedError()
 
 
     def train_epoch(self, max_steps=None):
@@ -245,7 +254,7 @@ class Trainer:
             with nan_ctx_manager:
                 # forward pass 
                 with autocast(enabled=self.cfg.mixed):
-                    loss = self.forward_step(self.model, batch)              
+                    loss = self.forward_step(batch)              
                 # backward pass
                 self.scaler.scale(loss).backward()  # scale loss and, in turn, gradients to prevent underflow
             
@@ -288,7 +297,7 @@ class Trainer:
         val_loss = np.array(0.0)
         for batch_idx, batch in enumerate(self.val_dl):
             with torch.no_grad():
-                val_loss += self.forward_step(self.model, batch).item()
+                val_loss += self.forward_step(batch).item()
 
         val_loss /= (batch_idx + 1)
         val_loss = hvd_allreduce(val_loss, name='val_loss')

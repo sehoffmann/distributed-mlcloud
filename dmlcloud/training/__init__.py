@@ -1,8 +1,8 @@
 from . import config
-from .trainer import Trainer
+from .trainer import BaseTrainer
 
 __all__ = [
-    'Trainer',
+    'BaseTrainer',
     'config',
 ]
 assert __all__ == sorted(__all__) 

@@ -4,6 +4,7 @@ class TrainingConfig(SubConfig):
 
     def __init__(self, dct):
         self.dct = dct
+        self.seed = None
         self.epochs = 10
         self.batch_size = 32
         self.init_lr = 1e-3
@@ -15,6 +16,7 @@ class TrainingConfig(SubConfig):
         self.check_nans = False
 
     def add_arguments(self, parser):
+        parser.add_argument('--seed', type=int, default=None, help='The random seed')
         parser.add_argument('--epochs', type=int, default=None, help='The number of epochs to train')
         parser.add_argument('--batch-size', type=int, default=None, help='The batch size')
         parser.add_argument('--init-lr', type=float, default=None, help='The initial learning rate')
@@ -27,6 +29,8 @@ class TrainingConfig(SubConfig):
 
 
     def parse_args(self, args):
+        if args.seed:
+            self.seed = args.seed
         if args.epochs:
             self.epochs = args.epochs
         if args.batch_size:
@@ -42,6 +46,14 @@ class TrainingConfig(SubConfig):
         self.mixed = args.mixed
         self.adasum = args.adasum
         self.check_nans = args.check_nans
+
+    @property
+    def seed(self):
+        return self.dct['seed']
+    
+    @seed.setter
+    def seed(self, value):
+        self.dct['seed'] = value
 
     @property
     def epochs(self):
