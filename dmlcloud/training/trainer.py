@@ -16,8 +16,50 @@ from .util import log_diagnostics, setup_logging, setup_horovod, print_worker, l
 from .checkpoint import config_consistency_check, create_project_dir, find_old_checkpoint
 from ..util import is_wandb_initialized, set_wandb_startup_timeout, hvd_allreduce
 
+class TrainerInterface:
+    """
+    These methods must be implemented for each experiment
+    """
 
-class BaseTrainer:
+    def create_dataset(self):
+        """
+        Returns a tuple of (train_dl, val_dl).
+        Will be available as self.train_dl and self.val_dl.
+        These shall be iterators that yield batches.
+        """
+        raise NotImplementedError()
+
+    def create_model(self):
+        """
+        Returns a torch.nn.Module.
+        Will be available as self.model.
+        If you need multiple networks, e.g. for GANs, wrap them in a nn.Module.
+        """
+        raise NotImplementedError()
+
+    def create_loss(self):
+        """
+        Returns a loss function.
+        Will be available as self.loss_fn.
+        """
+        raise NotImplementedError()
+
+
+    def create_scheduler(self):
+        """
+        Returns a scheduler or None.
+        """
+        return None
+
+
+    def create_optimizer(self, params, lr):
+        """
+        Returns an optimizer.
+        Will be available as self.optimizer.
+        """
+        raise NotImplementedError()
+
+class BaseTrainer(TrainerInterface):
 
     def __init__(self, config):
         self.cfg = config
@@ -92,31 +134,15 @@ class BaseTrainer:
             resume = 'must' if self.is_resumed else 'never',
             config = self.cfg.as_dictionary()
         )
-
-
-    def create_dataset(self):
-        raise NotImplementedError()
-
+    
     def setup_dataset(self):
         self.train_dl, self.val_dl = self.create_dataset()
-
-    def create_model(self):
-        raise NotImplementedError()
 
     def setup_model(self):
         self.model = self.create_model().to(self.device)
 
-    def create_loss(self):
-        raise NotImplementedError()
-
     def setup_loss(self):
         self.loss_fn = self.create_loss()
-
-    def create_scheduler(self):
-        return None
-
-    def create_optimizer(self, params, lr):
-        raise NotImplementedError()
 
     def setup_optimizer(self):
         lr = self.cfg.init_lr * (self.cfg.batch_size / 32.0)
@@ -289,7 +315,6 @@ class BaseTrainer:
         self.train_losses.append(total_loss)
         self.n_nan = hvd_allreduce(n_nan, name='n_nan', op=hvd.Sum)
         
-
 
     def evaluate_epoch(self):
         self.model.eval()

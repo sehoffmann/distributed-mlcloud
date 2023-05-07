@@ -14,7 +14,7 @@ class MNISTModelConfig(SubConfig):
 
     def __init__(self, dct):
         self.dct = dct
-        self.model = 'MLP'
+        self.model_type = 'MLP'
 
     def add_arguments(self, parser):
         parser.add_argument('--model', choices=['MLP', 'CNN'], default='MLP', help='The model to use')
@@ -23,12 +23,12 @@ class MNISTModelConfig(SubConfig):
         self.model = args.model
 
     @property
-    def model(self):
-        return self.dct['model']
+    def model_type(self):
+        return self.dct['type']
 
-    @model.setter
-    def model(self, value):
-        self.dct['model'] = value
+    @model_type.setter
+    def model_type(self, value):
+        self.dct['type'] = value
 
 
 class MNISTTrainer(BaseTrainer):
@@ -37,14 +37,14 @@ class MNISTTrainer(BaseTrainer):
         return nn.CrossEntropyLoss()
 
     def create_model(self):
-        if self.cfg.model == 'MLP':
+        if self.cfg.model_type == 'MLP':
             return nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(28*28, 128),
                 nn.ReLU(),
                 nn.Linear(128, 10)
             )
-        elif self.cfg.model == 'CNN':
+        elif self.cfg.model_type == 'CNN':
             return nn.Sequential(
                 nn.Conv2d(1, 16, 3, 1),
                 nn.ReLU(),
