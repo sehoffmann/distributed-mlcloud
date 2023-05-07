@@ -3,15 +3,14 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchvision.datasets import MNIST
 from torchvision import transforms
+from torchvision.datasets import MNIST
 
 from ..training import BaseTrainer
 from ..training.config import DefaultConfig, SubConfig
 
 
 class MNISTModelConfig(SubConfig):
-
     def __init__(self, dct):
         self.dct = dct
         self.model_type = 'MLP'
@@ -32,18 +31,12 @@ class MNISTModelConfig(SubConfig):
 
 
 class MNISTTrainer(BaseTrainer):
-    
     def create_loss(self):
         return nn.CrossEntropyLoss()
 
     def create_model(self):
         if self.cfg.model_type == 'MLP':
-            return nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(28*28, 128),
-                nn.ReLU(),
-                nn.Linear(128, 10)
-            )
+            return nn.Sequential(nn.Flatten(), nn.Linear(28 * 28, 128), nn.ReLU(), nn.Linear(128, 10))
         elif self.cfg.model_type == 'CNN':
             return nn.Sequential(
                 nn.Conv2d(1, 16, 3, 1),
@@ -51,16 +44,13 @@ class MNISTTrainer(BaseTrainer):
                 nn.Conv2d(16, 32, 3, 2),
                 nn.ReLU(),
                 nn.Flatten(),
-                nn.Linear(14*14*32, 128),
+                nn.Linear(14 * 14 * 32, 128),
                 nn.ReLU(),
-                nn.Linear(128, 10)
+                nn.Linear(128, 10),
             )
 
     def create_dataset(self):
-        transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
         train = MNIST(root='mnist', train=True, transform=transform, download=True)
         test = MNIST(root='mnist', train=False, transform=transform, download=True)
         train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, shuffle=True)
@@ -68,23 +58,15 @@ class MNISTTrainer(BaseTrainer):
         return train_dl, test_dl
 
     def create_optimizer(self, params, lr):
-        return torch.optim.AdamW(
-            params, 
-            lr=lr,
-            weight_decay=self.cfg.weight_decay   
-        )
-    
+        return torch.optim.AdamW(params, lr=lr, weight_decay=self.cfg.weight_decay)
+
     def create_scheduler(self):
-        return CosineAnnealingLR(
-            self.optimizer, 
-            T_max = self.cfg.epochs,
-            eta_min=1e-7
-        )
+        return CosineAnnealingLR(self.optimizer, T_max=self.cfg.epochs, eta_min=1e-7)
 
     def forward_step(self, batch):
-        X,label = batch
+        X, label = batch
         pred = self.model(X)
-        return self.loss_fn(pred,label)
+        return self.loss_fn(pred, label)
 
 
 def create_config():

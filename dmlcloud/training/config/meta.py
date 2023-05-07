@@ -1,10 +1,10 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from .common import SubConfig
 
-class MetaConfig(SubConfig):
 
+class MetaConfig(SubConfig):
     def __init__(self, dct):
         self.dct = dct
         self.trainer_cls = None
@@ -14,7 +14,6 @@ class MetaConfig(SubConfig):
         self.project_name = None
         self.experiment_name = None
         self.command_line = ' '.join(sys.argv)
-        
 
     def add_arguments(self, parser):
         parser.add_argument('--dir', type=Path, default=None, help='The project directory')
@@ -35,7 +34,7 @@ class MetaConfig(SubConfig):
     @property
     def trainer_cls(self):
         return self.dct['trainer_cls']
-    
+
     @trainer_cls.setter
     def trainer_cls(self, value):
         self.dct['trainer_cls'] = value
@@ -51,7 +50,7 @@ class MetaConfig(SubConfig):
     @property
     def model_dir(self):
         return self.dct['model_dir']
-    
+
     @model_dir.setter
     def model_dir(self, value):
         self.dct['model_dir'] = value
@@ -59,7 +58,7 @@ class MetaConfig(SubConfig):
     @property
     def id_prefix(self):
         return self.dct['id_prefix']
-    
+
     @id_prefix.setter
     def id_prefix(self, value):
         self.dct['id_prefix'] = value
@@ -67,15 +66,15 @@ class MetaConfig(SubConfig):
     @property
     def project_name(self):
         return self.dct['project_name']
-    
+
     @project_name.setter
     def project_name(self, value):
         self.dct['project_name'] = value
-    
+
     @property
     def experiment_name(self):
         return self.dct['experiment_name']
-    
+
     @experiment_name.setter
     def experiment_name(self, value):
         self.dct['experiment_name'] = value
@@ -83,7 +82,7 @@ class MetaConfig(SubConfig):
     @property
     def command_line(self):
         return self.dct['command_line']
-    
+
     @command_line.setter
     def command_line(self, value):
         self.dct['command_line'] = value

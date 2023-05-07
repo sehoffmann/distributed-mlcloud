@@ -1,27 +1,32 @@
-import os
-import logging
-import sys
-import torch
-import horovod.torch as hvd
 import json
+import logging
+import os
+import sys
+
+import horovod.torch as hvd
+import torch
 
 from .checkpoint import ExtendedJSONEncoder
 
+
 def print_worker(msg):
     print(f'Worker {hvd.rank()} ({hvd.cross_rank()}.{hvd.local_rank()}): {msg}', flush=True)
+
 
 def setup_horovod(print_status=True):
     hvd.init()
     n_tasks = int(os.environ.get('SLURM_NTASKS', 0))
     if n_tasks > 1 and hvd.size() == 1:
-        print('CRITICAL: Horovod only sees a single task! Run "horovodrun --check-build" an verify that MPI is supported. Terminating...')
+        print(
+            'CRITICAL: Horovod only sees a single task! Run "horovodrun --check-build" an verify that MPI is supported. Terminating...'
+        )
         sys.exit(1)
 
     if print_status:
         print_worker('STARTED')
 
-    hvd.barrier()   # make sure that all processes are running at this point
-                    # this is very important, otherwise subsequent broadcast operations might time out
+    hvd.barrier()  # make sure that all processes are running at this point
+    # this is very important, otherwise subsequent broadcast operations might time out
 
 
 def setup_logging():
@@ -38,14 +43,17 @@ def setup_logging():
     root_logger.addHandler(stdout_handler)
     root_logger.addHandler(stderr_handler)
 
+
 def delimiter(n=40, newline=True):
     delim = '-' * n
     if newline:
         delim += '\n'
     return delim
 
+
 def log_delimiter(n=40):
     logging.info(delimiter(n, newline=False))
+
 
 def log_diagnostics(device):
     msg = f'Training distributed on {hvd.size()} workers/gpus\n'

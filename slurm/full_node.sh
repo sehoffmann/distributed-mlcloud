@@ -42,4 +42,3 @@ sbatch $ARGS ${@:2}
 
 echo
 echo "Writing log to $LOG_FILE"
-

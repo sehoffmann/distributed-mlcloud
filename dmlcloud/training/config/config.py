@@ -3,8 +3,8 @@ import argparse
 from .meta import MetaConfig
 from .training import TrainingConfig
 
-class BaseConfig:
 
+class BaseConfig:
     def __init__(self, dct=None):
         self._sub_configs = []
         self.dct = {}
@@ -18,14 +18,14 @@ class BaseConfig:
     def __getattr__(self, name):
         if name == '_sub_configs':
             return super().__getattribute__(name)
-        
+
         for cfg in self._sub_configs:
             try:
                 return getattr(cfg, name)
             except AttributeError:
                 pass
         raise AttributeError(f'Config has no attribute {name}')
-    
+
     def __setattr__(self, name, value):
         if name != '_sub_configs':
             for cfg in self._sub_configs:
@@ -55,10 +55,9 @@ class BaseConfig:
 
     def as_dictionary(self):
         return dict(self.dct)
-    
+
 
 class DefaultConfig(BaseConfig):
-
     def _setup_sub_configs(self):
         self.set_sub_config('meta', MetaConfig)
         self.set_sub_config('training', TrainingConfig)

@@ -18,7 +18,7 @@ copy_project() {
 
     echo "Copying $1 to SCRATCH"
     srun_once_per_node rclone copy $1 $SCRATCH/project
-    
+
     cd $SCRATCH/project
     local GIT_DIFF=`git diff -U0 HEAD`
     echo "Most recent commit: `git log --oneline -n 1`"
@@ -33,7 +33,7 @@ DEVICE_CHECKER="
 import sys
 for i in range(8):
     dev = '/dev/nvidia%d' % i
-    try: 
+    try:
         open(dev, 'r').close()
         print(dev)
     except:

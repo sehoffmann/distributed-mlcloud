@@ -1,7 +1,9 @@
-import torch
-import horovod.torch as hvd
 import os
+
+import horovod.torch as hvd
+import torch
 import wandb
+
 
 def hvd_allreduce(val, *args, **kwargs):
     tensor = torch.as_tensor(val)

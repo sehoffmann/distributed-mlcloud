@@ -1,8 +1,9 @@
-import logging
 import json
-import sys
+import logging
 import os
+import sys
 from datetime import datetime
+
 import horovod.torch as hvd
 from wandb.sdk.lib.runid import generate_id
 
@@ -17,7 +18,7 @@ class ExtendedJSONEncoder(json.JSONEncoder):
             return f'<cls {o.__module__}.{o.__name__}>'
         elif callable(o):
             return f'<fn {o.__module__}.{o.__name__}>'
-        
+
         try:
             return super().default(o)
         except TypeError:
@@ -39,10 +40,10 @@ def get_slurm_id():
 def find_old_checkpoint(base_dir, id_prefix):
     slurm_id = get_slurm_id()
     slurm_dir = next(iter(base_dir.glob(f'*-{id_prefix}{slurm_id}')), None)
-    
+
     if get_config_path(base_dir).exists():
         model_dir = base_dir
-        job_id = base_dir.stem.split('-',1)[0]
+        job_id = base_dir.stem.split('-', 1)[0]
     elif slurm_id and slurm_dir is not None:
         model_dir = slurm_dir
         job_id = id_prefix + slurm_id
@@ -68,7 +69,7 @@ def create_project_dir(base_dir, config):
 
 def config_consistency_check(model_dir, config):
     config_path = get_config_path(model_dir)
-    with open(config_path, 'r') as file:
+    with open(config_path) as file:
         if file.read() != json.dumps(config.as_dictionary(), cls=ExtendedJSONEncoder):
             logging.critical('Config of resumed run does not match current config. Aborting...')
             sys.exit(1)

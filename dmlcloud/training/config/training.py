@@ -1,7 +1,7 @@
 from .common import SubConfig
 
-class TrainingConfig(SubConfig):
 
+class TrainingConfig(SubConfig):
     def __init__(self, dct):
         self.dct = dct
         self.seed = None
@@ -20,13 +20,14 @@ class TrainingConfig(SubConfig):
         parser.add_argument('--epochs', type=int, default=None, help='The number of epochs to train')
         parser.add_argument('--batch-size', type=int, default=None, help='The batch size')
         parser.add_argument('--init-lr', type=float, default=None, help='The initial learning rate')
-        parser.add_argument('--rampup-epochs', type=int, default=None, help='The number of epochs to rampup the learning rate')
+        parser.add_argument(
+            '--rampup-epochs', type=int, default=None, help='The number of epochs to rampup the learning rate'
+        )
         parser.add_argument('--weight-decay', type=float, default=None, help='The weight decay')
         parser.add_argument('--clip-gradients', type=float, default=None, help='The gradient clipping value')
         parser.add_argument('--mixed', action='store_true', help='Whether to use mixed precision training')
         parser.add_argument('--adasum', action='store_true', help='Whether to use adasum for distributed training')
         parser.add_argument('--check-nans', action='store_true', help='Whether to check for NaNs during training')
-
 
     def parse_args(self, args):
         if args.seed:
@@ -50,7 +51,7 @@ class TrainingConfig(SubConfig):
     @property
     def seed(self):
         return self.dct['seed']
-    
+
     @seed.setter
     def seed(self, value):
         self.dct['seed'] = value
@@ -58,7 +59,7 @@ class TrainingConfig(SubConfig):
     @property
     def epochs(self):
         return self.dct['epochs']
-    
+
     @epochs.setter
     def epochs(self, value):
         self.dct['epochs'] = value
@@ -66,7 +67,7 @@ class TrainingConfig(SubConfig):
     @property
     def batch_size(self):
         return self.dct['batch_size']
-    
+
     @batch_size.setter
     def batch_size(self, value):
         self.dct['batch_size'] = value
@@ -78,15 +79,15 @@ class TrainingConfig(SubConfig):
     @init_lr.setter
     def init_lr(self, value):
         self.dct['init_lr'] = value
-    
+
     @property
     def rampup_epochs(self):
         return self.dct['rampup_epochs']
-    
+
     @rampup_epochs.setter
     def rampup_epochs(self, value):
         self.dct['rampup_epochs'] = value
-    
+
     @property
     def weight_decay(self):
         return self.dct['weight_decay']
@@ -98,7 +99,7 @@ class TrainingConfig(SubConfig):
     @property
     def clip_gradients(self):
         return self.dct['clip_gradients']
-    
+
     @clip_gradients.setter
     def clip_gradients(self, value):
         self.dct['clip_gradients'] = value
@@ -106,11 +107,11 @@ class TrainingConfig(SubConfig):
     @property
     def mixed(self):
         return self.dct['mixed']
-    
+
     @mixed.setter
     def mixed(self, value):
         self.dct['mixed'] = value
-    
+
     @property
     def adasum(self):
         return self.dct['adasum']
@@ -122,7 +123,7 @@ class TrainingConfig(SubConfig):
     @property
     def check_nans(self):
         return self.dct['check_nans']
-    
+
     @check_nans.setter
     def check_nans(self, value):
         self.dct['check_nans'] = value
