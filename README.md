@@ -1,55 +1,58 @@
-# Python Project Template
+# Distributed Training on the mlcloud
 
-This is a quickstart project template for Python that already comes attached with the following features:
+This repository demonstrates and explains how one can train neural networks in a distributed manner with torch and horovod on the mlcloud. Its contribution is multifold:
 
-* Packaging and metadata support
-* Formatting and linting via *pre-commit*, *black*, *usort*, and *flake8*
-* Testing via *pytest*
-* CI via github-actions
+1. It acts as documentation and tutorial for various aspects of distributed training, especially with the topology of the mlcloud in mind.
+2. It provides various utility scripts for slurm and a script to initialize a conda environment that is ready for distributed training.
+3. It already provides a fleshed out training skeleton that one can either use directly or borrow from.
 
+## Conda Setup
 
-## Configuration
+This repository already provides a script that installs a conda environment with full cuda and horovod support, including support for NCCL and MPI. In particular, the script provides an environment that does not suffer from any version mismatchs (as of 07.05.2023).
 
-To tailor this template to your needs, the following steps must be taken:
+### Step 1: Setting your conda location
 
-1. Rename the *myproject* package folder to your project name
-2. Change metadata and project name in *setup.cfg*.
-3. Do not forget to change the version attribute to point to your new package name as well.
-4. Add dependencies to *requirements.txt*
-5. Adjust the *LICENSE* file to your liking.
-6. Adjust this *README.md* file to your liking.
+It is strongly recommended to move conda environments to either `$WORK` or `$WORK2` and not locate them in your home directory (default). If you have already done so, you can skip this step.
 
-### Formatting and linting
+1. Copy `environment/.condarc` to your home directory.
+2. Create two folders that will hold your environments and the actual dowloaded packages respectively:
+    - `mkdir -p $WORK2/conda/envs $WORK2/conda/pkgs`
 
-Install *pre-commit* and *pytest* via
+### Step 2: Install mamba
+
+To significantly speed up the installation process, the installer script uses mamba instead of conda. Mamba is a native, i.e. compiled, implementation of conda, but exposes the same CLI.
+
 ```
-pip install -r ci_requirements.txt
-```
-
-To format and lint the entire codebase run:
-```
-pre-commit run --all-files
+conda create --name mamba
+conda install -n mamba -c conda-forge mamba
 ```
 
-To perform this step automatically during each commit (and fail on errors) run:
-```
-pre-commit install
-```
+### Step 3: Create the environment
 
-### Testing
-To run the tests execute:
-```
-pytest
-```
-in the top-level directory.
-Tests can also be executed individually by running them as regular python script. This requires you to add a small main function to them, c.f. *test/test_myproject.py*.
+1. Make sure that your working directory is `./environment`.
+2. Make sure that mamba is available: `conda activate mamba`
+3. Execute `./create_env.sh YOUR_NAME`, where *YOUR_NAME* is the name of your new environment.
 
-### Github Actions
-This project defines the following workflows:
-1. *run_linting.yml* will run `pre-commit run --all-files` on every push to develop and pull request
-2. *run_tests.yml* will run `pytest` on Windows, Ubuntu, and MacOS on every push to develop and pull_request
-3. *release_public.yml* and *release_test.yml* can be triggered manually to build a wheel distribution and publish it to PyPI or TestPyPI respectively
+## Features of the Training Skeleton
 
-For the publising to work, you need to add the PyPI API token as Github secrets:
-* *PYPI_TOKEN* for the official PyPI index
-* *TEST_PYPI_TOKEN* for the TestPyPI index
+1. Distributed training
+2. Mixed precision support (optional)
+3. Wandb support
+4. Checkpointing and support for preemptable partitions
+5. Logging of various useful diagnostic informations during startup
+6. NaN checks for debugging purposes (optional)
+7. A pre-defined structure for defining configs and experiments that still allows for a lot of flexibility
+
+## Using the Training Skeleton
+
+Have a look at `dmlcloud/experiments/mnist.py` for a simple example on how to create a new experiment. In general, the following steps need to be done:
+
+1. Sub-class `BaseTrainer` and provide functions which create your model, dataset, loss, etc.
+2. Write a `create_trainer` function that creates a new instance of your Trainer given parsed command line arguments from `argparse`.
+3. Write a `add_parser` function that adds a new subparser for your experiments and registers all command line options with argparse.
+4. Optionally, define new subconfigs for options specific to your experiment or model
+5. Import and register your experiment in the cli script `dmlcloud/cli/train.py`.
+
+Notice that step 2-5 are only required if you want to use the already provided cli training script at `dmlcloud/cli/train.py`.
+
+The main motivation behind the config system is to separate where configs come from, e.g. argparse, from their actual usage. Due to this you could for instance also opt to disregard these steps 2-5 and instead read configs from a json file.

@@ -1,12 +1,19 @@
-channels: 
+channels:
   - pytorch-nightly
   - nvidia
   - anaconda
   - conda-forge
   - defaults
 dependencies:
+
+  ############# ESSENTIALS ################
+  #      Do not remove any of these
+  #########################################
+
   - python >= 3.9
   - pip
+  - pip:
+    - -r requirements.txt
 
   # Cuda & Buildtools
   - cudatoolkit = 11.8  # we need to specifiy this for nccl, because pytorch-cuda and nccl use different cuda packages
@@ -28,6 +35,11 @@ dependencies:
   - ucx  # UCX support for OpenMPI
   - nccl >= 2.15.5 # <- might cause cuda incompability issues because it does not take into account
                     #    the cuda version. Thus we MUST fixate the version
+
+
+  ################ OPTIONAL DEPENDENCIES ##################
+  # Feel free to remove any of these if you don't need them
+  #########################################################
 
   # Packaging
   - sphinx
@@ -56,6 +68,3 @@ dependencies:
   - cartopy >= 0.21
   - ffmpeg >= 5.1
   - anaconda::graphviz
-
-  - pip:
-    - -r requirements.txt
