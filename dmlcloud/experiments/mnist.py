@@ -16,10 +16,11 @@ class MNISTModelConfig(SubConfig):
         self.model_type = 'MLP'
 
     def add_arguments(self, parser):
-        parser.add_argument('--model', choices=['MLP', 'CNN'], default='MLP', help='The model to use')
+        parser.add_argument('--model', choices=['MLP', 'CNN'], default=None, help='The model to use')
 
     def parse_args(self, args):
-        self.model = args.model
+        if args.model is not None:
+            self.model_type = args.model
 
     @property
     def model_type(self):
@@ -36,7 +37,14 @@ class MNISTTrainer(BaseTrainer):
 
     def create_model(self):
         if self.cfg.model_type == 'MLP':
-            return nn.Sequential(nn.Flatten(), nn.Linear(28 * 28, 128), nn.ReLU(), nn.Linear(128, 10))
+            return nn.Sequential(
+                *[
+                    nn.Flatten(),
+                    nn.Linear(28 * 28, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, 10),
+                ]
+            )
         elif self.cfg.model_type == 'CNN':
             return nn.Sequential(
                 nn.Conv2d(1, 16, 3, 1),
@@ -51,9 +59,11 @@ class MNISTTrainer(BaseTrainer):
 
     def create_dataset(self):
         transform = transforms.Compose(
-            [transforms.ToTensor(), 
-             transforms.Normalize((0.1307,), (0.3081,)),
-             ])
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.1307,), (0.3081,)),
+            ]
+        )
         train = MNIST(root='mnist', train=True, transform=transform, download=True)
         test = MNIST(root='mnist', train=False, transform=transform, download=True)
         train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, shuffle=True)
@@ -67,8 +77,12 @@ class MNISTTrainer(BaseTrainer):
         return CosineAnnealingLR(self.optimizer, T_max=self.cfg.epochs, eta_min=1e-7)
 
     def forward_step(self, batch_idx, batch):
-        X, label = [tensor.to(self.device, non_blocking=True) for tensor in batch]
+        X, label = (tensor.to(self.device, non_blocking=True) for tensor in batch)
         pred = self.model(X)
+
+        acc = (pred.argmax(dim=1) == label).float().mean()
+        self.log_metric('acc', acc)
+
         return self.loss_fn(pred, label)
 
 

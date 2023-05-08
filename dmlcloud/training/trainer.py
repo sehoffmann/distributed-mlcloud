@@ -13,8 +13,9 @@ from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
 
 from ..util import is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import config_consistency_check, create_project_dir, find_old_checkpoint
-from .util import log_config, log_delimiter, log_diagnostics, print_worker, setup_horovod, setup_logging
 from .metrics import MetricSaver
+from .util import log_config, log_delimiter, log_diagnostics, print_worker, setup_horovod, setup_logging
+
 
 class TrainerInterface:
     """
@@ -254,7 +255,6 @@ class BaseTrainer(TrainerInterface):
             for key, value in metrics.items():
                 wandb.run.summary[f'best/{key}'] = value
 
-
     def forward_step(self, batch_idx, batch):
         raise NotImplementedError()
 
@@ -306,10 +306,9 @@ class BaseTrainer(TrainerInterface):
         self.log_metric('lr', self.scheduler.get_last_lr()[0], allreduce=False)
         for k, v in self.scaler.state_dict().items():
             self.log_metric(f'scaler/{k}', v, allreduce=False)
-            
+
         if self.scheduler is not None:
             self.scheduler.step()
-
 
     def evaluate_epoch(self):
         self.switch_mode(train=False)

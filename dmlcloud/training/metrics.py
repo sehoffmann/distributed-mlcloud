@@ -1,28 +1,29 @@
 import csv
 
-import torch
 import horovod.torch as hvd
+import torch
+
 
 class Metric:
-
-    def __init__(self, name, reduction = hvd.Average, allreduce=True):
+    def __init__(self, name, reduction=hvd.Average, allreduce=True):
         self.name = name
         self.reduction = reduction
         self.batch_values = []
         self.allreduce = allreduce
 
     def _reduce(self, value, dim=0):
-        match self.reduction:
-            case hvd.Average:
-                return value.mean(dim=dim)
-            case hvd.Sum:
-                return value.sum(dim=dim)
-            case hvd.Min:
-                return value.min(dim=dim)[0]
-            case hvd.Max:
-                return value.max(dim=dim)[0]
-            case hvd.Product:
-                return value.prod(dim=dim)
+        if self.reduction == hvd.Average:
+            return value.mean(dim=dim)
+        elif self.reduction == hvd.Sum:
+            return value.sum(dim=dim)
+        elif self.reduction == hvd.Min:
+            return value.min(dim=dim)[0]
+        elif self.reduction == hvd.Max:
+            return value.max(dim=dim)[0]
+        elif self.reduction == hvd.Product:
+            return value.prod(dim=dim)
+        else:
+            raise ValueError(f'Unknown reduction {self.reduction}')
 
     def add_batch_value(self, value):
         tensor = torch.as_tensor(value)
@@ -37,8 +38,8 @@ class Metric:
         else:
             return tensor
 
-class MetricSaver:
 
+class MetricSaver:
     def __init__(self, epochs=None):
         self.epochs = epochs or []
         self.current_metrics = {}
@@ -68,13 +69,13 @@ class MetricSaver:
         for epoch, metrics in enumerate(self.epochs):
             dct = {}
             if with_epoch:
-                dct['epoch'] = epoch+1
+                dct['epoch'] = epoch + 1
 
             for name, value in metrics.items():
                 if value.dim() == 0:
                     dct[name] = value.item()
             scalars.append(dct)
-            
+
         return scalars
 
     def scalars_to_csv(self, path):
