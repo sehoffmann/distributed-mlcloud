@@ -1,10 +1,10 @@
-from .config import BaseConfig, DefaultConfig
 from .common import SubConfig
+from .config import BaseConfig, DefaultConfig
 from .training import TrainingConfig
 
 
 __all__ = [
-    'BaseConfig', 
+    'BaseConfig',
     'DefaultConfig',
     'ModelConfig',
     'SubConfig',

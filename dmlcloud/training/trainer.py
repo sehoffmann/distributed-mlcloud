@@ -11,10 +11,10 @@ import wandb
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
 
-from ..util import hvd_allreduce, is_wandb_initialized, set_wandb_startup_timeout
+from ..util import is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import config_consistency_check, create_project_dir, find_old_checkpoint
 from .util import log_config, log_delimiter, log_diagnostics, print_worker, setup_horovod, setup_logging
-
+from .metrics import MetricSaver
 
 class TrainerInterface:
     """
@@ -65,6 +65,9 @@ class BaseTrainer(TrainerInterface):
         self.model_dir = None
         self.job_id = None
         self.is_resumed = False
+        self.train_metrics = MetricSaver()
+        self.val_metrics = MetricSaver()
+        self.epoch = 1
         self.setup_all()
 
     def setup_all(self):
@@ -173,8 +176,8 @@ class BaseTrainer(TrainerInterface):
 
     def load_state_dict(self, state_dict):
         self.epoch = state_dict['epoch']
-        self.train_losses = state_dict['training_loss']
-        self.val_losses = state_dict['validation_loss']
+        self.train_metrics = MetricSaver(state_dict['train_metrics'])
+        self.val_metrics = MetricSaver(state_dict['val_metrics'])
         self.model.load_state_dict(state_dict['model_state'])
         self.optimizer.load_state_dict(state_dict['optimizer_state'])
         self.scheduler.load_state_dict(state_dict['scheduler_state'])
@@ -183,8 +186,8 @@ class BaseTrainer(TrainerInterface):
     def state_dict(self):
         state_dict = {
             'epoch': self.epoch,
-            'training_loss': self.train_losses,
-            'validation_loss': self.val_losses,
+            'train_metrics': self.train_metrics.epochs,
+            'val_metrics': self.val_metrics.epochs,
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'scheduler_state': self.scheduler.state_dict(),
@@ -214,58 +217,71 @@ class BaseTrainer(TrainerInterface):
             if is_wandb_initialized():
                 wandb.save(str(self.model_dir / 'best.pt'), policy='now')
 
+        self.train_metrics.scalars_to_csv(self.model_dir / 'train_metrics.csv')
+        self.val_metrics.scalars_to_csv(self.model_dir / 'val_metrics.csv')
+
     def is_best_epoch(self):
-        return self.val_losses[-1] == min(self.val_losses)
+        return self.val_metrics.last['loss'] == min(self.val_metrics.get_metrics('loss'))
 
     def log_epoch(self):
         if hvd.rank() != 0:
             return
 
         n_remaining = self.cfg.epochs - self.epoch - 1
-
         eta = n_remaining * (datetime.now() - self.start_time) / (self.epoch + 1)
         eta -= timedelta(microseconds=eta.microseconds)
-
         per_step = (datetime.now() - self.epoch_start_time) / len(self.train_dl)
         per_step = per_step.total_seconds() * 1000
 
         logging.info(
-            f'Epoch {self.epoch:3d}:  {self.train_losses[-1]:.2f}   {self.val_losses[-1]:.2f}   {eta}   {per_step:.0f}'
+            f'Epoch {self.epoch:3d}:  {self.train_metrics.last["loss"]:.2f}   {self.val_metrics.last["loss"]:.2f}   {eta}   {per_step:.0f}'
         )
-        if wandb.run is not None:
-            wandb.log(
-                {
-                    'train-loss': self.train_losses[-1],
-                    'val-loss': self.val_losses[-1],
-                    'nan-batches': self.n_nan,
-                    'ms-per-step': per_step,
-                }
-            )
 
-            # Check for new best model
-            if self.val_losses[-1] == min(self.val_losses):
-                wandb.run.summary['best/epoch'] = self.epoch
-                wandb.run.summary['best/train_loss'] = self.train_losses[-1]
-                wandb.run.summary['best/val_loss'] = self.val_losses[-1]
+        if is_wandb_initialized():
+            self.log_wandb()
 
-    def forward_step(self, batch):
+    def log_wandb(self):
+        metrics = {}
+        for key, value in self.train_metrics.scalar_metrics()[-1].items():
+            metrics[f'train/{key}'] = value
+
+        for key, value in self.val_metrics.scalar_metrics()[-1].items():
+            metrics[f'val/{key}'] = value
+
+        wandb.log(metrics)
+        if self.is_best_epoch():
+            wandb.run.summary['best/epoch'] = self.epoch
+            for key, value in metrics.items():
+                wandb.run.summary[f'best/{key}'] = value
+
+
+    def forward_step(self, batch_idx, batch):
         raise NotImplementedError()
 
+    def switch_mode(self, train=True):
+        if train:
+            self.model.train()
+            self.current_metrics = self.train_metrics
+            self.is_train = True
+            self.is_eval = False
+        else:
+            self.model.eval()
+            self.current_metrics = self.val_metrics
+            self.is_train = False
+            self.is_eval = True
+
     def train_epoch(self, max_steps=None):
-        self.model.train()
+        self.switch_mode(train=True)
 
         nan_ctx_manager = torch.autograd.detect_anomaly() if self.cfg.check_nans else nullcontext()
-        total_loss = np.array(0.0)
-        n_batches = np.array(0)
-        n_nan = np.array(0)
-        for batch in self.train_dl:
-            if max_steps and n_batches >= max_steps:
+        for batch_idx, batch in enumerate(self.train_dl):
+            if max_steps and batch_idx >= max_steps:
                 break
 
             with nan_ctx_manager:
                 # forward pass
                 with autocast(enabled=self.cfg.mixed):
-                    loss = self.forward_step(batch)
+                    loss = self.forward_step(batch_idx, batch)
                 # backward pass
                 self.scaler.scale(loss).backward()  # scale loss and, in turn, gradients to prevent underflow
 
@@ -281,36 +297,27 @@ class BaseTrainer(TrainerInterface):
                 self.optimizer.zero_grad()
 
             if not torch.isnan(loss):  # mixed-precision might produce nan steps
-                total_loss += loss.item()
-                n_batches += 1
+                self.log_metric('loss', loss)
+                self.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
+                self.log_metric('n_nan', 0, hvd.Sum, allreduce=False)
             else:
-                n_nan += 1
+                self.log_metric('n_nan', 1, hvd.Sum, allreduce=False)
 
-        # log
-        if is_wandb_initialized():
-            wandb.log({'n_steps': n_batches, 'lr': self.scheduler.get_last_lr()[0]}, commit=False)
-            scaler_state = {f'scaler/{k}': v for k, v in self.scaler.state_dict().items()}
-            wandb.log(scaler_state, commit=False)
-
+        self.log_metric('lr', self.scheduler.get_last_lr()[0], allreduce=False)
+        for k, v in self.scaler.state_dict().items():
+            self.log_metric(f'scaler/{k}', v, allreduce=False)
+            
         if self.scheduler is not None:
             self.scheduler.step()
 
-        total_loss /= max(n_batches, 1)  # n_batches can be 0 in divergent regime
-        total_loss = hvd_allreduce(total_loss, name='train_loss')
-        self.train_losses.append(total_loss)
-        self.n_nan = hvd_allreduce(n_nan, name='n_nan', op=hvd.Sum)
 
     def evaluate_epoch(self):
-        self.model.eval()
+        self.switch_mode(train=False)
 
-        val_loss = np.array(0.0)
         for batch_idx, batch in enumerate(self.val_dl):
             with torch.no_grad():
-                val_loss += self.forward_step(batch).item()
-
-        val_loss /= batch_idx + 1
-        val_loss = hvd_allreduce(val_loss, name='val_loss')
-        self.val_losses.append(val_loss)
+                loss = self.forward_step(batch_idx, batch).item()
+                self.log_metric('loss', loss)
 
     def train(self, max_steps=None):
         hvd.barrier()
@@ -322,15 +329,16 @@ class BaseTrainer(TrainerInterface):
         logging.info('           train   eval   ETA               ms/step')
         logging.info('---------------------------------------------------')
 
-        self.train_losses = []
-        self.val_losses = []
-        self.epoch = 1
-
         self.start_time = datetime.now()
         while self.epoch <= self.cfg.epochs:
             self.epoch_start_time = datetime.now()
             self.train_epoch(max_steps)
             self.evaluate_epoch()
+            self.train_metrics.reduce()
+            self.val_metrics.reduce()
             self.log_epoch()
             self.save_checkpoint()
             self.epoch += 1
+
+    def log_metric(self, name, value, reduction=hvd.Average, allreduce=True):
+        self.current_metrics.log_metric(name, value, reduction, allreduce)

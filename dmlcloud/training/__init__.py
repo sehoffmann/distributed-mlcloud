@@ -5,4 +5,4 @@ __all__ = [
     'BaseTrainer',
     'config',
 ]
-assert __all__ == sorted(__all__) 
+assert __all__ == sorted(__all__)

@@ -50,7 +50,10 @@ class MNISTTrainer(BaseTrainer):
             )
 
     def create_dataset(self):
-        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+        transform = transforms.Compose(
+            [transforms.ToTensor(), 
+             transforms.Normalize((0.1307,), (0.3081,)),
+             ])
         train = MNIST(root='mnist', train=True, transform=transform, download=True)
         test = MNIST(root='mnist', train=False, transform=transform, download=True)
         train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, shuffle=True)
@@ -63,8 +66,8 @@ class MNISTTrainer(BaseTrainer):
     def create_scheduler(self):
         return CosineAnnealingLR(self.optimizer, T_max=self.cfg.epochs, eta_min=1e-7)
 
-    def forward_step(self, batch):
-        X, label = batch
+    def forward_step(self, batch_idx, batch):
+        X, label = [tensor.to(self.device, non_blocking=True) for tensor in batch]
         pred = self.model(X)
         return self.loss_fn(pred, label)
 
