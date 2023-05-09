@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+from ...git import git_hash
 from .common import SubConfig
 
 
@@ -14,6 +15,7 @@ class MetaConfig(SubConfig):
         self.project_name = None
         self.experiment_name = None
         self.command_line = ' '.join(sys.argv)
+        self.git_hash = git_hash()
 
     def add_arguments(self, parser):
         parser.add_argument('--dir', type=Path, default=None, help='The project directory')
@@ -86,3 +88,11 @@ class MetaConfig(SubConfig):
     @command_line.setter
     def command_line(self, value):
         self.dct['command_line'] = value
+
+    @property
+    def git_hash(self):
+        return self.dct['git_hash']
+
+    @git_hash.setter
+    def git_hash(self, value):
+        self.dct['git_hash'] = value

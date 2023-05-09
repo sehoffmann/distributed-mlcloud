@@ -12,9 +12,18 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
 
 from ..util import is_wandb_initialized, set_wandb_startup_timeout
-from .checkpoint import config_consistency_check, create_project_dir, find_old_checkpoint
+from .checkpoint import resume_project_dir
 from .metrics import MetricSaver
-from .util import log_config, log_delimiter, log_diagnostics, print_worker, setup_horovod, setup_logging
+from .util import (
+    git_hash,
+    log_config,
+    log_delimiter,
+    log_diagnostics,
+    log_git,
+    print_worker,
+    setup_horovod,
+    setup_logging,
+)
 
 
 class TrainerInterface:
@@ -75,17 +84,24 @@ class BaseTrainer(TrainerInterface):
         setup_horovod()
         self.seed()
         self.setup_general()
-        self.setup_model_dir()
+        self.model_dir, self.job_id, self.is_resumed = resume_project_dir(self.base_dir, self.cfg)
         self.setup_wandb()
-        log_diagnostics(self.device)
-        log_config(self.cfg)
+        self.print_diagnositcs()
+
         self.setup_dataset()
         self.setup_model()
         self.setup_loss()
         self.setup_optimizer()
         self.load_checkpoint()
+
         hvd.broadcast_parameters(self.model.state_dict(), root_rank=0)
         hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
+
+    def print_diagnositcs(self):
+        log_delimiter()
+        log_git()
+        log_diagnostics(self.device)
+        log_config(self.cfg)
 
     def setup_general(self):
         if torch.cuda.is_available():
@@ -95,6 +111,7 @@ class BaseTrainer(TrainerInterface):
 
         torch.set_num_threads(8)
         setup_logging()
+        self.cfg.git_hash = git_hash()
 
     def seed(self):
         if self.cfg.seed is None:
@@ -105,18 +122,6 @@ class BaseTrainer(TrainerInterface):
         random.seed(self.cfg.seed)
         torch.manual_seed(self.cfg.seed)
         torch.cuda.manual_seed(self.cfg.seed)
-
-    def setup_model_dir(self):
-        self.model_dir, self.job_id = find_old_checkpoint(self.base_dir, self.cfg.id_prefix)
-        if self.model_dir is not None:
-            config_consistency_check(self.model_dir, self.cfg)
-            self.is_resumed = True
-            logging.info(f'Resuming run from {self.model_dir}')
-        else:
-            self.model_dir, self.job_id = create_project_dir(self.base_dir, self.cfg)
-            self.is_resumed = False
-            logging.info(f'Created run directory {self.model_dir}')
-        hvd.barrier()
 
     def setup_wandb(self):
         if hvd.rank() != 0:
@@ -202,7 +207,9 @@ class BaseTrainer(TrainerInterface):
             self.load_state_dict(state_dict)
             self.epoch += 1
             logging.info(f'Loaded checkpoint from {cp_path}')
-            logging.info(f'Continuing training at epoch {self.epoch}, previous loss: {self.train_losses[-1]:.3f}')
+            logging.info(
+                f'Continuing training at epoch {self.epoch}, previous loss: {self.train_metrics.last["loss"]:.3f}'
+            )
         elif self.is_resumed:
             logging.critical('No checkpoint found!')
             sys.exit(1)

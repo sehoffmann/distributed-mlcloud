@@ -1,11 +1,12 @@
 import json
 import logging
 import os
-import sys
 from datetime import datetime
 
 import horovod.torch as hvd
 from wandb.sdk.lib.runid import generate_id
+
+from .config import DefaultConfig
 
 
 class ExtendedJSONEncoder(json.JSONEncoder):
@@ -23,6 +24,10 @@ class ExtendedJSONEncoder(json.JSONEncoder):
             return super().default(o)
         except TypeError:
             return str(o)
+
+
+class ExtendedJSONDecoder(json.JSONDecoder):
+    pass
 
 
 def get_config_path(model_dir):
@@ -62,14 +67,46 @@ def create_project_dir(base_dir, config):
 
     if hvd.rank() == 0:
         os.makedirs(model_dir)
-        with open(get_config_path(model_dir), 'w') as file:
-            json.dump(config.as_dictionary(), file, cls=ExtendedJSONEncoder)
+        save_config(get_config_path(model_dir), config)
+
     return model_dir, job_id
 
 
-def config_consistency_check(model_dir, config):
-    config_path = get_config_path(model_dir)
-    with open(config_path) as file:
-        if file.read() != json.dumps(config.as_dictionary(), cls=ExtendedJSONEncoder):
-            logging.critical('Config of resumed run does not match current config. Aborting...')
-            sys.exit(1)
+def resume_project_dir(base_dir, config):
+    model_dir, job_id = find_old_checkpoint(base_dir, config.id_prefix)
+    if model_dir is not None:
+        parsed_dct = load_config_dct(get_config_path(model_dir))
+        consistency_check(parsed_dct, config)
+        is_resumed = True
+        logging.info(f'Resuming run from {model_dir}')
+    else:
+        model_dir, job_id = create_project_dir(base_dir, config)
+        is_resumed = False
+        logging.info(f'Created run directory {model_dir}')
+    return model_dir, job_id, is_resumed
+
+
+def consistency_check(parsed_dct, config):
+    parsed_cfg = DefaultConfig(parsed_dct)
+    if parsed_cfg.git_hash != config.git_hash:
+        msg = 'Git hash of resumed run does not match current git hash.\n'
+        msg += f'Current git hash: {config.git_hash}\n'
+        msg += f'Git hash of resumed run: {parsed_cfg.git_hash}'
+        logging.warning(msg)
+
+    if parsed_cfg.command_line != config.command_line:
+        msg = 'Command line of resumed run does not match current command line.\n'
+        msg += f'Current command line: {config.command_line}\n'
+        msg += f'Command line of resumed run: {parsed_cfg.command_line}'
+        logging.warning(msg)
+
+
+def save_config(path, config):
+    with open(path, 'w') as file:
+        json.dump(config.as_dictionary(), file, cls=ExtendedJSONEncoder, indent=4)
+
+
+def load_config_dct(path):
+    with open(path) as file:
+        dct = json.load(file, cls=ExtendedJSONDecoder)
+        return dct

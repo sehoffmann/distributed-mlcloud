@@ -6,6 +6,7 @@ import sys
 import horovod.torch as hvd
 import torch
 
+from ..git import git_diff, git_hash
 from .checkpoint import ExtendedJSONEncoder
 
 
@@ -88,5 +89,12 @@ def log_diagnostics(device):
 def log_config(config):
     msg = 'CONFIG:\n'
     msg += json.dumps(config.dct, indent=4, cls=ExtendedJSONEncoder) + '\n'
+    msg += delimiter()
+    logging.info(msg)
+
+
+def log_git():
+    msg = f'Git Hash: {git_hash()}\n'
+    msg += f'Git Diff:\n{git_diff()}\n'
     msg += delimiter()
     logging.info(msg)
