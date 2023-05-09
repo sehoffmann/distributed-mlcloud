@@ -12,7 +12,9 @@ class Metric:
         self.allreduce = allreduce
 
     def _reduce(self, value, dim=0):
-        if self.reduction == hvd.Average:
+        if value.dim() == 0:
+            return value
+        elif self.reduction == hvd.Average:
             return value.mean(dim=dim)
         elif self.reduction == hvd.Sum:
             return value.sum(dim=dim)

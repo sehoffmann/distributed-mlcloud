@@ -341,7 +341,7 @@ class BaseTrainer(TrainerInterface):
 
         self.log_metric('lr', self.scheduler.get_last_lr()[0], allreduce=False)
         for k, v in self.scaler.state_dict().items():
-            self.log_metric(f'scaler/{k}', v, allreduce=False)
+            self.log_metric(f'scaler/{k}', v, hvd.Sum, allreduce=False)
 
         if self.scheduler is not None:
             self.scheduler.step()
