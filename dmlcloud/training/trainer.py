@@ -77,6 +77,8 @@ class BaseTrainer(TrainerInterface):
         self.setup_general()
         self.setup_model_dir()
         self.setup_wandb()
+        log_diagnostics(self.device)
+        log_config(self.cfg)
         self.setup_dataset()
         self.setup_model()
         self.setup_loss()
@@ -92,10 +94,7 @@ class BaseTrainer(TrainerInterface):
             self.device = torch.device('cpu')
 
         torch.set_num_threads(8)
-
         setup_logging()
-        log_diagnostics(self.device)
-        log_config(self.cfg)
 
     def seed(self):
         if self.cfg.seed is None:

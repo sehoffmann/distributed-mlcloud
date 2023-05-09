@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --partition gpu-2080ti-interactive
-#SBATCH --job-name=Jupyter
+#SBATCH --job-name=Interactive
 #SBATCH --time=06:00:00
 #SBATCH --gpus=1
 #SBATCH --cpus-per-gpu=8
