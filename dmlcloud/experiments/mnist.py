@@ -85,6 +85,9 @@ class MNISTTrainer(BaseTrainer):
 
         return self.loss_fn(pred, label)
 
+    def metric_names(self):
+        return ['train/acc', 'val/acc']
+
 
 def create_config():
     cfg = DefaultConfig()

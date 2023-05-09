@@ -85,10 +85,6 @@ class BaseTrainer(TrainerInterface):
         self.train_metrics = MetricSaver()
         self.val_metrics = MetricSaver()
         self.epoch = 1
-        self.table = ProgressTable(
-            columns=['Epoch', 'train/loss', 'val/loss', 'ETA', 'ms/step'],
-            print_row_on_update=False,
-        )
         self.setup_all()
 
     def setup_all(self):
@@ -97,6 +93,7 @@ class BaseTrainer(TrainerInterface):
         self.setup_general()
         self.model_dir, self.job_id, self.is_resumed = resume_project_dir(self.base_dir, self.cfg)
         self.setup_wandb()
+        self.setup_table()
         self.print_diagnositcs()
 
         self.setup_dataset()
@@ -113,6 +110,12 @@ class BaseTrainer(TrainerInterface):
         log_git()
         log_diagnostics(self.device)
         log_config(self.cfg)
+
+    def setup_table(self):
+        columns = ['Epoch', 'train/loss', 'val/loss']
+        columns += self.metric_names()
+        columns += ['ETA', 'ms/step']
+        self.table = ProgressTable(columns=columns, print_row_on_update=False)
 
     def setup_general(self):
         if torch.cuda.is_available():
@@ -255,6 +258,14 @@ class BaseTrainer(TrainerInterface):
         self.table['val/loss'] = self.val_metrics.last['loss']
         self.table['ETA'] = str(eta)
         self.table['ms/step'] = f'{per_step:.0f}'
+        for metric in self.metric_names():
+            splits = metric.split('/', 1)
+            if len(splits) == 2:
+                current_metrics = self.train_metrics if splits[0] == 'train' else self.val_metrics
+                self.table[metric] = current_metrics.last[splits[1]]
+            else:
+                self.table[metric] = self.train_metrics.last[metric]
+
         self.table.next_row()
 
         if is_wandb_initialized():
