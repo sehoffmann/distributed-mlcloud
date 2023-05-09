@@ -1,10 +1,10 @@
 from . import config
-from .trainer import BaseTrainer
 from .classification import ClassificationTrainer
+from .trainer import BaseTrainer
 
 __all__ = [
     'BaseTrainer',
     'ClassificationTrainer',
     'config',
 ]
-assert __all__ == sorted(__all__) 
+assert __all__ == sorted(__all__)

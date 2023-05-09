@@ -1,8 +1,9 @@
 from torch import nn
+
 from .trainer import BaseTrainer
 
-class ClassificationTrainer(BaseTrainer):
 
+class ClassificationTrainer(BaseTrainer):
     def forward_step(self, batch_idx, batch):
         X, label = (tensor.to(self.device, non_blocking=True) for tensor in batch)
         pred = self.model(X)

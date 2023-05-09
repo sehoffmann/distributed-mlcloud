@@ -8,9 +8,9 @@ import horovod.torch as hvd
 import numpy as np
 import torch
 import wandb
+from progress_table import ProgressTable
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
-from progress_table import ProgressTable
 
 from ..util import is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import resume_project_dir
@@ -68,12 +68,12 @@ class TrainerInterface:
         """
         raise NotImplementedError()
 
-
     def metric_names(self):
         """
         Returns a list with custom metrics that are displayed during training.
         """
         return []
+
 
 class BaseTrainer(TrainerInterface):
     def __init__(self, config):
@@ -232,11 +232,14 @@ class BaseTrainer(TrainerInterface):
         if hvd.rank() != 0:
             return
 
-        torch.save(self.state_dict(), self.model_dir / 'checkpoint.pt')
+        checkpoint_path = self.model_dir / 'checkpoint.pt'
+        best_path = self.model_dir / 'best.pt'
+
+        torch.save(self.state_dict(), checkpoint_path)
         if self.is_best_epoch():
-            torch.save(self.state_dict(), self.model_dir / 'best.pt')
+            torch.save(self.state_dict(), best_path)
             if is_wandb_initialized():
-                wandb.save(str(self.model_dir / 'best.pt'), policy='now')
+                wandb.save(str(best_path), policy='now', base_path=str(self.model_dir))
 
         self.train_metrics.scalars_to_csv(self.model_dir / 'train_metrics.csv')
         self.val_metrics.scalars_to_csv(self.model_dir / 'val_metrics.csv')

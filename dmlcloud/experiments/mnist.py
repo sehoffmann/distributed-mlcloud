@@ -33,7 +33,6 @@ class MNISTModelConfig(SubConfig):
 
 
 class MNISTTrainer(ClassificationTrainer):
-
     def create_model(self):
         if self.cfg.model_type == 'MLP':
             return nn.Sequential(
@@ -65,8 +64,12 @@ class MNISTTrainer(ClassificationTrainer):
         )
         train = MNIST(root='mnist', train=True, transform=transform, download=True)
         test = MNIST(root='mnist', train=False, transform=transform, download=True)
-        train_sampler = torch.utils.data.DistributedSampler(train, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=True, seed=self.cfg.seed)
-        val_sampler = torch.utils.data.DistributedSampler(test, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=False, seed=self.cfg.seed)
+        train_sampler = torch.utils.data.DistributedSampler(
+            train, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=True, seed=self.cfg.seed
+        )
+        val_sampler = torch.utils.data.DistributedSampler(
+            test, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=False, seed=self.cfg.seed
+        )
         train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, sampler=train_sampler)
         test_dl = torch.utils.data.DataLoader(test, batch_size=self.cfg.batch_size, sampler=val_sampler)
         return train_dl, test_dl
