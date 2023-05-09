@@ -8,9 +8,9 @@ import horovod.torch as hvd
 import numpy as np
 import torch
 import wandb
-from progress_table import ProgressTable
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
+from progress_table import ProgressTable
 
 from ..util import is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import resume_project_dir
@@ -68,12 +68,12 @@ class TrainerInterface:
         """
         raise NotImplementedError()
 
+
     def metric_names(self):
         """
         Returns a list with custom metrics that are displayed during training.
         """
         return []
-
 
 class BaseTrainer(TrainerInterface):
     def __init__(self, config):
@@ -302,6 +302,9 @@ class BaseTrainer(TrainerInterface):
 
     def train_epoch(self, max_steps=None):
         self.switch_mode(train=True)
+        self.table['Epoch'] = self.epoch
+        if hasattr(self.train_dl, 'sampler') and hasattr(self.train_dl.sampler, 'set_epoch'):
+            self.train_dl.sampler.set_epoch(self.epoch)
 
         nan_ctx_manager = torch.autograd.detect_anomaly() if self.cfg.check_nans else nullcontext()
         for batch_idx, batch in enumerate(self.train_dl):
@@ -358,7 +361,6 @@ class BaseTrainer(TrainerInterface):
 
         self.start_time = datetime.now()
         while self.epoch <= self.cfg.epochs:
-            self.table['Epoch'] = self.epoch
             self.epoch_start_time = datetime.now()
             self.train_epoch(max_steps)
             self.evaluate_epoch()

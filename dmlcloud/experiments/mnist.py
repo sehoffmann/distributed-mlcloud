@@ -1,12 +1,13 @@
 import argparse
 
+import horovod.torch as hvd
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision import transforms
 from torchvision.datasets import MNIST
 
-from ..training import BaseTrainer
+from ..training import ClassificationTrainer
 from ..training.config import DefaultConfig, SubConfig
 
 
@@ -31,9 +32,7 @@ class MNISTModelConfig(SubConfig):
         self.dct['type'] = value
 
 
-class MNISTTrainer(BaseTrainer):
-    def create_loss(self):
-        return nn.CrossEntropyLoss()
+class MNISTTrainer(ClassificationTrainer):
 
     def create_model(self):
         if self.cfg.model_type == 'MLP':
@@ -66,8 +65,10 @@ class MNISTTrainer(BaseTrainer):
         )
         train = MNIST(root='mnist', train=True, transform=transform, download=True)
         test = MNIST(root='mnist', train=False, transform=transform, download=True)
-        train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, shuffle=True)
-        test_dl = torch.utils.data.DataLoader(test, batch_size=self.cfg.batch_size, shuffle=False)
+        train_sampler = torch.utils.data.DistributedSampler(train, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=True, seed=self.cfg.seed)
+        val_sampler = torch.utils.data.DistributedSampler(test, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=False, seed=self.cfg.seed)
+        train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, sampler=train_sampler)
+        test_dl = torch.utils.data.DataLoader(test, batch_size=self.cfg.batch_size, sampler=val_sampler)
         return train_dl, test_dl
 
     def create_optimizer(self, params, lr):
@@ -75,18 +76,6 @@ class MNISTTrainer(BaseTrainer):
 
     def create_scheduler(self):
         return CosineAnnealingLR(self.optimizer, T_max=self.cfg.epochs, eta_min=1e-7)
-
-    def forward_step(self, batch_idx, batch):
-        X, label = (tensor.to(self.device, non_blocking=True) for tensor in batch)
-        pred = self.model(X)
-
-        acc = (pred.argmax(dim=1) == label).float().mean()
-        self.log_metric('acc', acc)
-
-        return self.loss_fn(pred, label)
-
-    def metric_names(self):
-        return ['train/acc', 'val/acc']
 
 
 def create_config():
