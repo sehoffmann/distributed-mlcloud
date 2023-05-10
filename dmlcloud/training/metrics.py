@@ -28,11 +28,17 @@ class Metric:
             raise ValueError(f'Unknown reduction {self.reduction}')
 
     def add_batch_value(self, value):
-        tensor = torch.as_tensor(value)
-        tensor = self._reduce(tensor, dim=0)
-        self.batch_values.append(tensor)
+        if self.reduction is None:
+            self.batch_values.append(value)
+        else:
+            tensor = torch.as_tensor(value)
+            tensor = self._reduce(tensor, dim=0)
+            self.batch_values.append(tensor)
 
     def reduce(self):
+        if self.reduction is None:
+            return self.batch_values[0]
+
         tensor = torch.stack(self.batch_values)
         tensor = self._reduce(tensor, dim=0)
         if self.allreduce:
@@ -74,8 +80,10 @@ class MetricSaver:
                 dct['epoch'] = epoch + 1
 
             for name, value in metrics.items():
-                if value.dim() == 0:
+                if isinstance(value, torch.Tensor) and value.dim() == 0:
                     dct[name] = value.item()
+                elif not isinstance(value, torch.Tensor):
+                    dct[name] = value
             scalars.append(dct)
 
         return scalars

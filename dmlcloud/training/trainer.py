@@ -8,9 +8,9 @@ import horovod.torch as hvd
 import numpy as np
 import torch
 import wandb
-from progress_table import ProgressTable
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
+from progress_table import ProgressTable
 
 from ..util import is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import resume_project_dir
@@ -68,12 +68,12 @@ class TrainerInterface:
         """
         raise NotImplementedError()
 
+
     def metric_names(self):
         """
         Returns a list with custom metrics that are displayed during training.
         """
         return []
-
 
 class BaseTrainer(TrainerInterface):
     def __init__(self, config):
@@ -112,9 +112,9 @@ class BaseTrainer(TrainerInterface):
         log_config(self.cfg)
 
     def setup_table(self):
-        columns = ['Epoch', 'train/loss', 'val/loss']
+        columns = ['Epoch', 'ETA', 'train/loss', 'val/loss']
         columns += self.metric_names()
-        columns += ['ETA', 'ms/step']
+        columns += ['ms/step']
         self.table = ProgressTable(columns=columns, print_row_on_update=False)
 
     def setup_general(self):
@@ -251,16 +251,11 @@ class BaseTrainer(TrainerInterface):
         if hvd.rank() != 0:
             return
 
-        n_remaining = self.cfg.epochs - self.epoch - 1
-        eta = n_remaining * (datetime.now() - self.start_time) / (self.epoch + 1)
-        eta -= timedelta(microseconds=eta.microseconds)
-        per_step = (datetime.now() - self.epoch_start_time) / len(self.train_dl)
-        per_step = per_step.total_seconds() * 1000
-
         self.table['train/loss'] = self.train_metrics.last['loss']
         self.table['val/loss'] = self.val_metrics.last['loss']
-        self.table['ETA'] = str(eta)
-        self.table['ms/step'] = f'{per_step:.0f}'
+        self.table['ETA'] = str(self.train_metrics.last['eta'])
+        self.table['ms/step'] = f'{self.train_metrics.last["ms_per_step"]:.1f}'
+
         for metric in self.metric_names():
             splits = metric.split('/', 1)
             if len(splits) == 2:
@@ -303,7 +298,14 @@ class BaseTrainer(TrainerInterface):
             self.is_train = False
             self.is_eval = True
 
+    def pre_train(self):
+        self.epoch_start_time = datetime.now()
+
+    def post_train(self):
+        self.epoch_train_end_time = datetime.now()
+
     def train_epoch(self, max_steps=None):
+        self.pre_train()
         self.switch_mode(train=True)
         self.table['Epoch'] = self.epoch
         if hasattr(self.train_dl, 'sampler') and hasattr(self.train_dl.sampler, 'set_epoch'):
@@ -339,14 +341,41 @@ class BaseTrainer(TrainerInterface):
             else:
                 self.log_metric('n_nan', 1, hvd.Sum, allreduce=False)
 
-        self.log_metric('lr', self.scheduler.get_last_lr()[0], allreduce=False)
+        self.n_train_batches = batch_idx + 1
+
+        self.log_metric('lr', self.scheduler.get_last_lr()[0], reduction=None)
         for k, v in self.scaler.state_dict().items():
-            self.log_metric(f'scaler/{k}', v, hvd.Sum, allreduce=False)
+            self.log_metric(f'scaler/{k}', v, reduction=None)
 
         if self.scheduler is not None:
             self.scheduler.step()
 
+        self.post_train()
+
+    def pre_eval(self):
+        pass
+
+    def post_eval(self):
+        self.epoch_end_time = datetime.now()
+        
+        n_remaining = self.cfg.epochs - self.epoch - 1
+        eta = n_remaining * (self.epoch_end_time  - self.start_time) / (self.epoch + 1)
+        eta -= timedelta(microseconds=eta.microseconds)
+        self.train_metrics.log_metric('eta', str(eta), reduction=None)
+
+        per_step = (self.epoch_train_end_time  - self.epoch_start_time) / self.n_train_batches
+        per_step = per_step.total_seconds() * 1000
+        self.train_metrics.log_metric('ms_per_step', per_step, reduction=None)
+
+        self.train_metrics.reduce()
+        self.val_metrics.reduce()
+        
+        self.log_epoch()
+        self.save_checkpoint()
+        self.epoch += 1
+
     def evaluate_epoch(self):
+        self.pre_eval()
         self.switch_mode(train=False)
 
         for batch_idx, batch in enumerate(self.val_dl):
@@ -354,27 +383,26 @@ class BaseTrainer(TrainerInterface):
                 loss = self.forward_step(batch_idx, batch).item()
                 self.log_metric('loss', loss)
 
-    def train(self, max_steps=None):
+        self.post_eval()
+
+    def pre_training(self):
         hvd.barrier()
         log_delimiter()
         print_worker('READY')
         hvd.barrier()
-
+        self.start_time = datetime.now()
         logging.info('Starting training...')
 
-        self.start_time = datetime.now()
-        while self.epoch <= self.cfg.epochs:
-            self.epoch_start_time = datetime.now()
-            self.train_epoch(max_steps)
-            self.evaluate_epoch()
-            self.train_metrics.reduce()
-            self.val_metrics.reduce()
-            self.log_epoch()
-            self.save_checkpoint()
-            self.epoch += 1
-
+    def post_training(self):
         self.table.close()
         logging.info('Training finished.')
+
+    def train(self, max_steps=None):
+        self.pre_training()
+        while self.epoch <= self.cfg.epochs:
+            self.train_epoch(max_steps)
+            self.evaluate_epoch()
+        self.post_training()
 
     def log_metric(self, name, value, reduction=hvd.Average, allreduce=True):
         self.current_metrics.log_metric(name, value, reduction, allreduce)

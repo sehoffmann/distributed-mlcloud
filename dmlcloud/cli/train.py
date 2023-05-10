@@ -1,8 +1,8 @@
 import argparse
 
-from ..experiments import mnist
+from ..experiments import cv_classification, mnist
 
-EXPERIMENTS = [mnist]
+EXPERIMENTS = [cv_classification, mnist]
 
 
 def parse_args():
