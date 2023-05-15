@@ -7,7 +7,6 @@ from torch.optim import AdamW
 
 from ...training import ClassificationTrainer
 from .tasks import TASKS
-from .transform import create_transform
 
 
 class CVClassificationTrainer(ClassificationTrainer):
@@ -17,11 +16,17 @@ class CVClassificationTrainer(ClassificationTrainer):
         kwargs.pop('create_fn')
         return create_fn(TASKS[self.cfg.task], **kwargs)
 
+    def create_transform(self, train=True):
+        dct = self.cfg.dct['train_transform'] if train else self.cfg.dct['val_transform']
+        kwargs = dict(dct)
+        create_fn = kwargs.pop('create_fn')
+        return create_fn(**kwargs)
+
     def create_dataset(self):
         task = TASKS[self.cfg.task]
         
-        train_transform = create_transform(task, self.cfg.train_transform_preset or 'collate')
-        val_transform = create_transform(task, self.cfg.eval_transform_preset or 'collate')
+        train_transform = self.create_transform(train=True)
+        val_transform = self.create_transform(train=False)
 
         train = task.dataset_cls(root=self.cfg.data_dir / task.name, train=True, transform=train_transform, download=True)
         test = task.dataset_cls(root=self.cfg.data_dir / task.name, train=False, transform=val_transform, download=True)

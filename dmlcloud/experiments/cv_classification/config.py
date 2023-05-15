@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from .models import MODEL_CONFIGS
 from .experiment import CVClassificationTrainer
 from ...training.config import DefaultConfig, SubConfig
 from .tasks import TASKS
-from .transform import TRANSFORMS
+from .models import MODEL_CONFIGS
+from .transform import TRANSFORM_PRESETS
 
 class ExperimentConfig(SubConfig):
     def __init__(self, dct):
@@ -19,8 +19,8 @@ class ExperimentConfig(SubConfig):
     def add_arguments(self, parser):
         parser.add_argument('--model', choices=list(MODEL_CONFIGS.keys()), default=None, help='The model to use')
         parser.add_argument('--data', default=None, help='Path to the dataset')
-        parser.add_argument('--train-transform', choices=TRANSFORMS, default=None, help='The transform to use for training')
-        parser.add_argument('--eval-transform', choices=TRANSFORMS, default=None, help='The transform to use for evaluation')
+        parser.add_argument('--train-transform', choices=TRANSFORM_PRESETS, default=None, help='The transform to use for training')
+        parser.add_argument('--eval-transform', choices=TRANSFORM_PRESETS, default=None, help='The transform to use for evaluation')
 
     def parse_args(self, args):
         self.task = args.task
@@ -84,9 +84,11 @@ def create_config():
 
 def create_trainer(args):
     cfg = create_config()
-    TASKS[args.task].default_config(cfg)
+    task = TASKS[args.task] 
+    
+    task.default_config(cfg)
     cfg.parse_args(args)
-    cfg.dct['model'] = MODEL_CONFIGS[cfg.model_preset]
+    task.postprocess_config(cfg)
     return CVClassificationTrainer(cfg)
 
 
