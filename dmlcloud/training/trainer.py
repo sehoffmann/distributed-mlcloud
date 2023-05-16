@@ -152,7 +152,15 @@ class BaseTrainer(TrainerInterface):
         )
 
     def setup_dataset(self):
-        self.train_dl, self.val_dl = self.create_dataset()
+        hvd.barrier()
+        if hvd.rank() == 0:
+            logging.info('Creating dataset')
+            self.train_dl, self.val_dl = self.create_dataset()
+            hvd.barrier()
+        else:
+            hvd.barrier()  # wait until rank 0 has created the dataset (e.g. downloaded it)
+            self.train_dl, self.val_dl = self.create_dataset()
+            
 
     def setup_model(self):
         self.model = self.create_model().to(self.device)
