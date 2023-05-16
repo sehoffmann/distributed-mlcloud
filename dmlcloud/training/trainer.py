@@ -84,6 +84,7 @@ class BaseTrainer(TrainerInterface):
         self.is_resumed = False
         self.train_metrics = MetricSaver()
         self.val_metrics = MetricSaver()
+        self.misc_metrics = MetricSaver()
         self.epoch = 1
         self.setup_all()
 
@@ -115,6 +116,7 @@ class BaseTrainer(TrainerInterface):
         columns = ['Epoch', 'ETA', 'train/loss', 'val/loss']
         columns += self.metric_names()
         columns += ['ms/step']
+        columns += ['time/epoch']
         self.table = ProgressTable(columns=columns, print_row_on_update=False)
 
     def setup_general(self):
@@ -205,6 +207,7 @@ class BaseTrainer(TrainerInterface):
         self.epoch = state_dict['epoch']
         self.train_metrics = MetricSaver(state_dict['train_metrics'])
         self.val_metrics = MetricSaver(state_dict['val_metrics'])
+        self.misc_metrics = MetricSaver(state_dict['misc_metrics'])
         self.model.load_state_dict(state_dict['model_state'])
         self.optimizer.load_state_dict(state_dict['optimizer_state'])
         self.scheduler.load_state_dict(state_dict['scheduler_state'])
@@ -215,6 +218,7 @@ class BaseTrainer(TrainerInterface):
             'epoch': self.epoch,
             'train_metrics': self.train_metrics.epochs,
             'val_metrics': self.val_metrics.epochs,
+            'misc_metrics': self.misc_metrics.epochs,
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'scheduler_state': self.scheduler.state_dict(),
@@ -251,6 +255,7 @@ class BaseTrainer(TrainerInterface):
 
         self.train_metrics.scalars_to_csv(self.model_dir / 'train_metrics.csv')
         self.val_metrics.scalars_to_csv(self.model_dir / 'val_metrics.csv')
+        self.misc_metrics.scalars_to_csv(self.model_dir / 'misc_metrics.csv')
 
     def is_best_epoch(self):
         return self.val_metrics.last['loss'] == min(self.val_metrics.get_metrics('loss'))
@@ -261,8 +266,9 @@ class BaseTrainer(TrainerInterface):
 
         self.table['train/loss'] = self.train_metrics.last['loss']
         self.table['val/loss'] = self.val_metrics.last['loss']
-        self.table['ETA'] = str(self.train_metrics.last['eta'])
-        self.table['ms/step'] = f'{self.train_metrics.last["ms_per_step"]:.1f}'
+        self.table['ETA'] = str(self.misc_metrics.last['eta'])
+        self.table['ms/step'] = f'{self.misc_metrics.last["ms_per_step"]:.1f}'
+        self.table['time/epoch'] = str(self.misc_metrics.last['time_per_epoch'])
 
         for metric in self.metric_names():
             splits = metric.split('/', 1)
@@ -285,11 +291,15 @@ class BaseTrainer(TrainerInterface):
         for key, value in self.val_metrics.scalar_metrics()[-1].items():
             metrics[f'val/{key}'] = value
 
+        for key, value in self.misc_metrics.scalar_metrics()[-1].items():
+            metrics[f'misc/{key}'] = value
+
         wandb.log(metrics)
         if self.is_best_epoch():
             wandb.run.summary['best/epoch'] = self.epoch
             for key, value in metrics.items():
-                wandb.run.summary[f'best/{key}'] = value
+                if not key.startswith('misc'):
+                    wandb.run.summary[f'best/{key}'] = value
 
     def forward_step(self, batch_idx, batch):
         raise NotImplementedError()
@@ -344,16 +354,16 @@ class BaseTrainer(TrainerInterface):
 
             if not torch.isnan(loss):  # mixed-precision might produce nan steps
                 self.log_metric('loss', loss)
-                self.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
-                self.log_metric('n_nan', 0, hvd.Sum, allreduce=False)
+                self.misc_metrics.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
+                self.misc_metrics.log_metric('n_nan', 0, hvd.Sum, allreduce=False)
             else:
-                self.log_metric('n_nan', 1, hvd.Sum, allreduce=False)
+                self.misc_metrics.log_metric('n_nan', 1, hvd.Sum, allreduce=False)
 
         self.n_train_batches = batch_idx + 1
 
-        self.log_metric('lr', self.scheduler.get_last_lr()[0], reduction=None)
+        self.misc_metrics.log_metric('lr', self.scheduler.get_last_lr()[0], reduction=None)
         for k, v in self.scaler.state_dict().items():
-            self.log_metric(f'scaler/{k}', v, reduction=None)
+            self.misc_metrics.log_metric(f'scaler/{k}', v, reduction=None)
 
         if self.scheduler is not None:
             self.scheduler.step()
@@ -367,16 +377,20 @@ class BaseTrainer(TrainerInterface):
         self.epoch_end_time = datetime.now()
         
         n_remaining = self.cfg.epochs - self.epoch - 1
-        eta = n_remaining * (self.epoch_end_time  - self.start_time) / (self.epoch + 1)
-        eta -= timedelta(microseconds=eta.microseconds)
-        self.train_metrics.log_metric('eta', str(eta), reduction=None)
+        per_epoch = (self.epoch_end_time  - self.start_time) / (self.epoch + 1)
+        per_epoch -= timedelta(microseconds=per_epoch.microseconds)
+        eta = n_remaining * per_epoch
+        self.misc_metrics.log_metric('eta', str(eta), reduction=None)
+        self.misc_metrics.log_metric('time_per_epoch', str(per_epoch), reduction=None)
+
 
         per_step = (self.epoch_train_end_time  - self.epoch_start_time) / self.n_train_batches
         per_step = per_step.total_seconds() * 1000
-        self.train_metrics.log_metric('ms_per_step', per_step, reduction=None)
+        self.misc_metrics.log_metric('ms_per_step', per_step, reduction=None)
 
         self.train_metrics.reduce()
         self.val_metrics.reduce()
+        self.misc_metrics.reduce()
         
         self.log_epoch()
         self.save_checkpoint()
@@ -394,8 +408,8 @@ class BaseTrainer(TrainerInterface):
         self.post_eval()
 
     def pre_training(self):
-        hvd.barrier()
         log_delimiter()
+        hvd.barrier()
         print_worker('READY')
         hvd.barrier()
         self.start_time = datetime.now()

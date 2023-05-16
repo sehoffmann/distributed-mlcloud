@@ -20,9 +20,8 @@ ARGS+=" -N $MAX_NODES"
 ARGS+=" -n $N_GPUS"
 
 # allocate full node
-ARGS+=" --gpus-per-node=8"
+ARGS+=" --gres=gpu:$N_GPUS"
 ARGS+=" --cpus-per-gpu=8"
-ARGS+=" -B 2:18:2"
 
 # cpu <-> task distribution
 ARGS+=" --cpus-per-task=8"
@@ -30,7 +29,6 @@ ARGS+=" -m block:block:block"
 
 # misc flags
 ARGS+=" --gres-flags=enforce-binding"
-ARGS+=" --exclusive=user"
 ARGS+=" --output=$LOG_FILE"
 ARGS+=" --open-mode=append"  # important for requeued jobs
 ARGS+=" -v"
