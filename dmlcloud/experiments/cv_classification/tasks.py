@@ -3,6 +3,7 @@ from .models import MODEL_CONFIGS
 from . import transform
 
 CropType = transform.CropType
+
 class Task:
     def __init__(self, name, dataset_cls, num_classes, input_channels, img_size, resize_size=None, mean=None, std=None, crop_type=CropType.NONE, crop_padding=0, random_flips=True):
         self.name = name
@@ -26,6 +27,10 @@ class Task:
         config.dct['train_transform'] = transform.create_config_dict(self, config.train_transform_preset)
         config.dct['val_transform'] = transform.create_config_dict(self, config.val_transform_preset)
 
+    def create_datasets(self, config, path, train_transform, val_transform):
+        train = self.dataset_cls(root=path, train=True, transform=train_transform, download=True)
+        test = self.dataset_cls(root=path, train=False, transform=val_transform, download=True)
+        return train, test
 
 class CIFAR10(Task):
 
@@ -62,6 +67,11 @@ class ImageNet(Task):
         config.train_transform_preset = 'imagenet'
         config.val_transform_preset = 'cv_eval'
         config.epochs = 90
+
+    def create_datasets(self, config, path, train_transform, val_transform):
+        train = self.dataset_cls(root=path, split='train', transform=train_transform)
+        val = self.dataset_cls(root=path, split='val', transform=train_transform)
+        return train, val
 
 
 class EMNIST(Task):

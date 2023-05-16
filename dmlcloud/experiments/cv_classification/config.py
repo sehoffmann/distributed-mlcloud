@@ -11,6 +11,7 @@ class ExperimentConfig(SubConfig):
         self.dct = dct
         self.task = None
         self.data_dir = Path('./data').resolve()
+        self.direct_path = False
         self.model_preset = None
         self.train_transform_preset = None
         self.eval_transform_preset = None
@@ -19,6 +20,7 @@ class ExperimentConfig(SubConfig):
     def add_arguments(self, parser):
         parser.add_argument('--model', choices=list(MODEL_CONFIGS.keys()), default=None, help='The model to use')
         parser.add_argument('--data', default=None, help='Path to the dataset')
+        parser.add_argument('--direct-path', action='store_true', help='Whether to use the direct path for the dataset')
         parser.add_argument('--train-transform', choices=TRANSFORM_PRESETS, default=None, help='The transform to use for training')
         parser.add_argument('--eval-transform', choices=TRANSFORM_PRESETS, default=None, help='The transform to use for evaluation')
 
@@ -28,6 +30,8 @@ class ExperimentConfig(SubConfig):
             self.model_preset = args.model
         if args.data is not None:
             self.data_dir = Path(args.data).resolve()
+        if args.direct_path:
+            self.direct_path = True
         if args.train_transform is not None:
             self.train_transform_preset = args.train_transform
         if args.eval_transform is not None:

@@ -28,16 +28,19 @@ class CVClassificationTrainer(ClassificationTrainer):
         train_transform = self.create_transform(train=True)
         val_transform = self.create_transform(train=False)
 
-        train = task.dataset_cls(root=self.cfg.data_dir / task.name, train=True, transform=train_transform, download=True)
-        test = task.dataset_cls(root=self.cfg.data_dir / task.name, train=False, transform=val_transform, download=True)
+        path = self.cfg.data_dir if self.cfg.direct_path else self.cfg.data_dir / task.name
+        train, test = task.create_datasets(self.cfg, path, train_transform, val_transform)
+        
         train_sampler = torch.utils.data.DistributedSampler(
             train, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=True, seed=self.cfg.seed
         )
         val_sampler = torch.utils.data.DistributedSampler(
             test, num_replicas=hvd.size(), rank=hvd.rank(), shuffle=False, seed=self.cfg.seed
         )
+
         train_dl = torch.utils.data.DataLoader(train, batch_size=self.cfg.batch_size, sampler=train_sampler, num_workers=4)
         test_dl = torch.utils.data.DataLoader(test, batch_size=self.cfg.batch_size, sampler=val_sampler, num_workers=4)
+        
         return train_dl, test_dl
 
     def create_optimizer(self, params, lr):
