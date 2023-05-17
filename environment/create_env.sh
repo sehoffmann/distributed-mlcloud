@@ -6,7 +6,7 @@ if (( $# < 1 )); then
     exit 1
 fi
 
-if ! mamba -v &> /dev/null; then
+if ! mamba -V &> /dev/null; then
     echo "mamba not found! Make sure that you have mamba installed. \"conda install -c conda-forge mamba\""
     exit 1
 fi
