@@ -16,7 +16,7 @@ mkdir -p $LOG_DIR
 # basic task setup
 let "MAX_NODES = (N_GPUS+7) / 8"
 ARGS+=" -p $PARTITION"
-ARGS+=" -N $MAX_NODES"
+ARGS+=" -N $MAX_NODES" # important to prevent getting too many nodes
 ARGS+=" -n $N_GPUS"
 
 # allocate full node
