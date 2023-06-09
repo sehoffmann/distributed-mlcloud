@@ -25,6 +25,7 @@ from .util import (
     setup_horovod,
     setup_logging,
     global_grad_norm,
+    scale_lr,
 )
 
 
@@ -178,9 +179,9 @@ class BaseTrainer(TrainerInterface):
         )
 
     def setup_dataset(self):
+        logging.info('Creating dataset')
         hvd.barrier()
         if hvd.rank() == 0:
-            logging.info('Creating dataset')
             self.train_dl, self.val_dl = self.create_dataset()
             hvd.barrier()
         else:
@@ -188,24 +189,22 @@ class BaseTrainer(TrainerInterface):
             self.train_dl, self.val_dl = self.create_dataset()
 
     def setup_model(self):
+        logging.info('Creating model')
         self.model = self.create_model().to(self.device)
 
     def setup_loss(self):
         self.loss_fn = self.create_loss()
 
     def setup_optimizer(self):
-        lr = self.cfg.init_lr * (self.cfg.batch_size / 32.0)
-        if self.cfg.adasum:
-            lr_scaling = hvd.size()
-        elif hvd.nccl_built():
-            lr_scaling = hvd.local_size()
+        logging.info('Creating optimizer')
+        if self.cfg.scale_lr:
+            scaled_lr, lr_scaling = scale_lr(self.cfg.base_lr, self.cfg.batch_size, 32, self.cfg.adasum, use_gpu=self.device != torch.device('cpu'))
         else:
-            lr_scaling = 1.0
-        lr *= lr_scaling
+            scaled_lr, lr_scaling = self.cfg.base_lr, 1.0
 
-        logging.info(f'LR: {self.cfg.init_lr:.1e},  Scaled: {lr:.1e}')
+        logging.info(f'Base LR: {self.cfg.base_lr:.1e},  Scaled: {scaled_lr:.1e},  Rampup Epochs: {self.cfg.rampup_epochs}')
 
-        optimizer = self.create_optimizer(self.model.parameters(), lr)
+        optimizer = self.create_optimizer(self.model.parameters(), scaled_lr)
         self.optimizer = hvd.DistributedOptimizer(
             optimizer, named_parameters=self.model.named_parameters(), op=hvd.Adasum if self.cfg.adasum else hvd.Average
         )
@@ -367,6 +366,8 @@ class BaseTrainer(TrainerInterface):
             if max_steps and batch_idx >= max_steps:
                 break
 
+            self.optimizer.zero_grad()
+
             with nan_ctx_manager:
                 # forward pass
                 with autocast(enabled=self.cfg.mixed):
@@ -393,7 +394,6 @@ class BaseTrainer(TrainerInterface):
             with self.optimizer.skip_synchronize():  # we already synchronized manually
                 self.scaler.step(self.optimizer)
                 self.scaler.update()  # adjust gradient scaling based on number of infs/nans
-                self.optimizer.zero_grad()
 
             if not torch.isnan(loss):  # mixed-precision might produce nan steps
                 self.log_metric('loss', loss)
