@@ -29,7 +29,7 @@ class Task:
 
     def create_datasets(self, config, path, train_transform, val_transform):
         train = self.dataset_cls(root=path, train=True, transform=train_transform, download=True)
-        test = self.dataset_cls(root=path, train=False, transform=val_transform, download=True)
+        test = self.dataset_cls(root=path, train=False, transform=val_transform)
         return train, test
 
 class CIFAR10(Task):
