@@ -12,8 +12,8 @@ from ..training.config import DefaultConfig, SubConfig
 
 
 class MNISTModelConfig(SubConfig):
-    def __init__(self, dct):
-        self.dct = dct
+
+    def set_defaults(self):
         self.model_type = 'MLP'
 
     def add_arguments(self, parser):

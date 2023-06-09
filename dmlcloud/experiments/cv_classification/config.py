@@ -7,8 +7,7 @@ from .models import MODEL_CONFIGS
 from .transform import TRANSFORM_PRESETS
 
 class ExperimentConfig(SubConfig):
-    def __init__(self, dct):
-        self.dct = dct
+    def set_defaults(self):
         self.task = None
         self.data_dir = Path('./data').resolve()
         self.direct_path = False
