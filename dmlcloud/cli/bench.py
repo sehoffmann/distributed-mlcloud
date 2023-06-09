@@ -4,8 +4,7 @@ from ..experiments import ALL_EXPERIMENTS
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--interactive', action='store_true', help='If set, dont use wandb and checkpointing')
-    parser.add_argument('-n','--steps', type=int, default=None, help='Number of steps per epoch')
+    parser.add_argument('-n','--steps', type=int, default=200, help='Number of steps to benchmark')
     subparsers = parser.add_subparsers(help='Experiment to run')
     subparsers.required = True
 
@@ -19,9 +18,6 @@ def parse_args():
 
 def main():
     args, trainer = parse_args()
-    trainer.train(max_steps=args.steps, use_checkpointing=not args.interactive, use_wandb=not args.interactive)
-
-
-
-if __name__ == '__main__':
-    main()
+    print(f'Benchmarking {args.steps} steps')
+    trainer.cfg.epochs = 1
+    trainer.train(args.steps, use_checkpointing=False, use_wandb=False, print_diagnostics=False)
