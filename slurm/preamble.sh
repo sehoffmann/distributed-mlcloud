@@ -40,6 +40,10 @@ for i in range(8):
         pass
 "
 
+SBATCH_SCRIPT=`scontrol show job $SLURM_JOB_ID | awk -F= '/Command=/{print $2}' | head -n 1`
+SBATCH_SCRIPT_DIR=`dirname -- "$( readlink -f -- "$SBATCH_SCRIPT"; )"`
+
+
 export SLURM_ALLOC_BIND="gn"
 
 scontrol show job $SLURM_JOB_ID
@@ -47,6 +51,8 @@ echo "---------------------------------"
 
 echo "Training distributed with $N_GPUS GPUs (/processes)"
 echo "Running on $SLURM_JOB_NUM_NODES nodes: $SLURM_JOB_NODELIST"
+echo "SBATCH_SCRIPT: $SBATCH_SCRIPT"
+echo "SBATCH_SCRIPT_DIR: $SBATCH_SCRIPT_DIR"
 echo "---------------------------------"
 
 srun_once_per_node bash -c "$TASK_SERIAL_ECHO \"Topology:\n\`nvidia-smi topo -m\`\n\""
