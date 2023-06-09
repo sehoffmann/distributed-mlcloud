@@ -38,8 +38,8 @@ class BaseConfig:
         raise NotImplementedError()
 
     def set_sub_config(self, key, cls):
-        self.dct[key] = {}
-        sub_cfg = cls(self.dct[key])
+        self.dct.setdefault(key, {})
+        sub_cfg = cls(self.dct, key)
         self._sub_configs.append(sub_cfg)
 
     def create_parser(self, parser=None):

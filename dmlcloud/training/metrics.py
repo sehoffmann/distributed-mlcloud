@@ -3,6 +3,9 @@ import csv
 import horovod.torch as hvd
 import torch
 
+Var = 'var'
+Std = 'std'
+Statistics = 'statistics'
 
 class Metric:
     def __init__(self, name, reduction=hvd.Average, allreduce=True):
@@ -11,7 +14,7 @@ class Metric:
         self.batch_values = []
         self.allreduce = allreduce
 
-    def _reduce(self, value, dim=0):
+    def _reduce(self, value, dim=None):
         if value.dim() == 0:
             return value
         elif self.reduction == hvd.Average:
@@ -24,14 +27,21 @@ class Metric:
             return value.max(dim=dim)[0]
         elif self.reduction == hvd.Product:
             return value.prod(dim=dim)
+        elif self.reduction == Var:
+            return value.var(dim=dim)
+        elif self.reduction == Std:
+            return value.std(dim=dim)
         else:
             raise ValueError(f'Unknown reduction {self.reduction}')
 
     def add_batch_value(self, value):
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu()  # this is very important to avoid memory leaks and for performance
+
         if self.reduction is None:
             self.batch_values.append(value)
         else:
-            tensor = torch.as_tensor(value)
+            tensor = torch.as_tensor(value, device='cpu')
             tensor = self._reduce(tensor, dim=0)
             self.batch_values.append(tensor)
 
@@ -42,7 +52,13 @@ class Metric:
         tensor = torch.stack(self.batch_values)
         tensor = self._reduce(tensor, dim=0)
         if self.allreduce:
-            return hvd.allreduce(tensor, op=self.reduction, name=f'metric/{self.name}')
+            if self.reduction is Var:
+                return hvd.allreduce_(tensor, op=hvd.Average, name=f'metric/{self.name}')  # not properly bessel corrected, but close enough
+            elif self.reduction is Std:
+                var = hvd.allreduce(tensor**2, op=hvd.Average, name=f'metric/{self.name}')
+                return torch.sqrt(var)
+            else:
+                return hvd.allreduce_(tensor, op=self.reduction, name=f'metric/{self.name}')
         else:
             return tensor
 
@@ -67,10 +83,16 @@ class MetricSaver:
         self.current_metrics = {}
 
     def log_metric(self, name, value, reduction=hvd.Average, allreduce=True):
-        if name not in self.current_metrics:
-            self.current_metrics[name] = Metric(name, reduction, allreduce)
-        metric = self.current_metrics[name]
-        metric.add_batch_value(value)
+        if reduction == Statistics: 
+            self.log_metric(f'{name}/mean', value, reduction=hvd.Average, allreduce=allreduce)
+            self.log_metric(f'{name}/std', value, reduction=Std, allreduce=allreduce)
+            self.log_metric(f'{name}/min', value, reduction=hvd.Min, allreduce=allreduce)
+            self.log_metric(f'{name}/max', value, reduction=hvd.Max, allreduce=allreduce)
+        else:
+            if name not in self.current_metrics:
+                self.current_metrics[name] = Metric(name, reduction, allreduce)
+            metric = self.current_metrics[name]
+            metric.add_batch_value(value)
 
     def scalar_metrics(self, with_epoch=False):
         scalars = []

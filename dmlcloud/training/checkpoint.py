@@ -61,9 +61,16 @@ def find_old_checkpoint(base_dir, id_prefix):
 
 def create_project_dir(base_dir, config):
     slurm_id = get_slurm_id()
+    job_id = hvd.broadcast_object(slurm_id if slurm_id else generate_id(), name='job_id')
+    job_id = config.id_prefix + job_id
+    
     date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-    job_id = config.id_prefix + hvd.broadcast_object(slurm_id if slurm_id else generate_id(), name='job_id')
-    model_dir = hvd.broadcast_object(base_dir / f'{date_str}-{job_id}', name='model_dir')
+    
+    name = f'{date_str}-{job_id}'
+    if config.experiment_name:
+        name += ' ' + config.experiment_name
+    
+    model_dir = hvd.broadcast_object(base_dir / name, name='model_dir')
 
     if hvd.rank() == 0:
         os.makedirs(model_dir)

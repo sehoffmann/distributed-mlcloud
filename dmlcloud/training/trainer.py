@@ -8,11 +8,11 @@ import horovod.torch as hvd
 import numpy as np
 import torch
 import wandb
+from progress_table import ProgressTable
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import ChainedScheduler, LinearLR
-from progress_table import ProgressTable
 
-from ..util import is_wandb_initialized, set_wandb_startup_timeout
+from ..util import is_hvd_initialized, is_wandb_initialized, set_wandb_startup_timeout
 from .checkpoint import resume_project_dir
 from .metrics import MetricSaver
 from .util import (
@@ -24,6 +24,7 @@ from .util import (
     print_worker,
     setup_horovod,
     setup_logging,
+    global_grad_norm,
 )
 
 
@@ -68,17 +69,20 @@ class TrainerInterface:
         """
         raise NotImplementedError()
 
-
     def metric_names(self):
         """
         Returns a list with custom metrics that are displayed during training.
         """
         return []
 
+
 class BaseTrainer(TrainerInterface):
     def __init__(self, config):
         self.cfg = config
-        self.base_dir = config.project_dir
+        self.reset()
+
+    def reset(self):
+        self.initialized = False
         self.model_dir = None
         self.job_id = None
         self.is_resumed = False
@@ -86,25 +90,42 @@ class BaseTrainer(TrainerInterface):
         self.val_metrics = MetricSaver()
         self.misc_metrics = MetricSaver()
         self.epoch = 1
-        self.setup_all()
 
-    def setup_all(self):
-        setup_horovod()
+    @property
+    def use_checkpointing(self):
+        return self.model_dir is not None
+
+    def setup_all(self, use_checkpointing=True, use_wandb=True, print_diagnostics=True):
+        if self.initialized:
+            raise ValueError('Trainer already initialized! Call reset() first.')
+
+        if not is_hvd_initialized():
+            setup_horovod()
+
         self.seed()
         self.setup_general()
-        self.model_dir, self.job_id, self.is_resumed = resume_project_dir(self.base_dir, self.cfg)
-        self.setup_wandb()
+
+        if use_checkpointing:
+            self.model_dir, self.job_id, self.is_resumed = resume_project_dir(self.cfg.project_dir, self.cfg)
+
+        if use_wandb:
+            self.setup_wandb()
+
         self.setup_table()
-        self.print_diagnositcs()
+
+        if print_diagnostics:
+            self.print_diagnositcs()
 
         self.setup_dataset()
         self.setup_model()
         self.setup_loss()
         self.setup_optimizer()
-        self.load_checkpoint()
+        self.resume_training()
 
         hvd.broadcast_parameters(self.model.state_dict(), root_rank=0)
         hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
+
+        self.initialized = True
 
     def print_diagnositcs(self):
         log_delimiter()
@@ -113,9 +134,12 @@ class BaseTrainer(TrainerInterface):
         log_config(self.cfg)
 
     def setup_table(self):
+        if hvd.rank() != 0:
+            return
+
         columns = ['Epoch', 'ETA', 'train/loss', 'val/loss']
         columns += self.metric_names()
-        columns += ['ms/step']
+        columns += ['ms/batch']
         columns += ['time/epoch']
         self.table = ProgressTable(columns=columns, print_row_on_update=False)
 
@@ -162,7 +186,6 @@ class BaseTrainer(TrainerInterface):
         else:
             hvd.barrier()  # wait until rank 0 has created the dataset (e.g. downloaded it)
             self.train_dl, self.val_dl = self.create_dataset()
-            
 
     def setup_model(self):
         self.model = self.create_model().to(self.device)
@@ -226,12 +249,18 @@ class BaseTrainer(TrainerInterface):
         }
         return state_dict
 
-    def load_checkpoint(self):
+    def load_checkpoint(self, path):
+        state_dict = torch.load(path, map_location=self.device)
+        self.load_state_dict(state_dict)
+        self.epoch += 1
+
+    def resume_training(self):
+        if not self.use_checkpointing:
+            return
+
         cp_path = self.model_dir / 'checkpoint.pt'
         if cp_path.exists():
-            state_dict = torch.load(cp_path, map_location=self.device)
-            self.load_state_dict(state_dict)
-            self.epoch += 1
+            self.load_checkpoint(cp_path)
             logging.info(f'Loaded checkpoint from {cp_path}')
             logging.info(
                 f'Continuing training at epoch {self.epoch}, previous loss: {self.train_metrics.last["loss"]:.3f}'
@@ -241,7 +270,7 @@ class BaseTrainer(TrainerInterface):
             sys.exit(1)
 
     def save_checkpoint(self):
-        if hvd.rank() != 0:
+        if hvd.rank() != 0 or not self.use_checkpointing:
             return
 
         checkpoint_path = self.model_dir / 'checkpoint.pt'
@@ -267,7 +296,7 @@ class BaseTrainer(TrainerInterface):
         self.table['train/loss'] = self.train_metrics.last['loss']
         self.table['val/loss'] = self.val_metrics.last['loss']
         self.table['ETA'] = str(self.misc_metrics.last['eta'])
-        self.table['ms/step'] = f'{self.misc_metrics.last["ms_per_step"]:.1f}'
+        self.table['ms/batch'] = f'{self.misc_metrics.last["ms_per_batch"]:.1f}'
         self.table['time/epoch'] = str(self.misc_metrics.last['time_per_epoch'])
 
         for metric in self.metric_names():
@@ -317,15 +346,19 @@ class BaseTrainer(TrainerInterface):
             self.is_eval = True
 
     def pre_train(self):
-        self.epoch_start_time = datetime.now()
+        self.epoch_train_start = datetime.now()
 
     def post_train(self):
-        self.epoch_train_end_time = datetime.now()
+        self.epoch_train_end = datetime.now()
 
     def train_epoch(self, max_steps=None):
         self.pre_train()
         self.switch_mode(train=True)
-        self.table['Epoch'] = self.epoch
+
+        # Do this now, and not later, to immidiately show that a new epoch has started
+        if hvd.rank() == 0:
+            self.table['Epoch'] = self.epoch
+        
         if hasattr(self.train_dl, 'sampler') and hasattr(self.train_dl.sampler, 'set_epoch'):
             self.train_dl.sampler.set_epoch(self.epoch)
 
@@ -341,8 +374,18 @@ class BaseTrainer(TrainerInterface):
                 # backward pass
                 self.scaler.scale(loss).backward()  # scale loss and, in turn, gradients to prevent underflow
 
+            if loss.isnan() and not self.scaler.is_enabled():
+                logging.critical('Got NaN loss but mixed precision training is disabled! This might be due to NaN values in the data or from diverging training.')
+                sys.exit(1)
+
             self.optimizer.synchronize()  # make sure all async allreduces are done
             self.scaler.unscale_(self.optimizer)  # now, unscale gradients again
+
+            if self.cfg.log_gradients:
+                norm = global_grad_norm(self.model.parameters())
+                self.log_metric('grad_norm', norm, allreduce=False, reduction='statistics')
+                if self.cfg.clip_gradients:
+                    self.log_metric('grad_norm/n_clipped', norm > self.cfg.clip_gradients, hvd.Sum, allreduce=False)
 
             if self.cfg.clip_gradients:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.clip_gradients)
@@ -354,12 +397,12 @@ class BaseTrainer(TrainerInterface):
 
             if not torch.isnan(loss):  # mixed-precision might produce nan steps
                 self.log_metric('loss', loss)
-                self.misc_metrics.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
-                self.misc_metrics.log_metric('n_nan', 0, hvd.Sum, allreduce=False)
+                self.misc_metrics.log_metric('n_nan', 0, hvd.Sum)
             else:
-                self.misc_metrics.log_metric('n_nan', 1, hvd.Sum, allreduce=False)
+                self.misc_metrics.log_metric('n_nan', 1, hvd.Sum)
 
-        self.n_train_batches = batch_idx + 1
+            self.misc_metrics.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
+            self.misc_metrics.log_metric('n_total_batches', 1, hvd.Sum, allreduce=True)
 
         self.misc_metrics.log_metric('lr', self.scheduler.get_last_lr()[0], reduction=None)
         for k, v in self.scaler.state_dict().items():
@@ -371,36 +414,39 @@ class BaseTrainer(TrainerInterface):
         self.post_train()
 
     def pre_eval(self):
-        pass
+        self.epoch_eval_start = datetime.now()
 
     def post_eval(self):
-        self.epoch_end_time = datetime.now()
-        
-        n_remaining = self.cfg.epochs - self.epoch - 1
-        per_epoch = (self.epoch_end_time  - self.start_time) / (self.epoch + 1)
+        self.epoch_eval_end = datetime.now()
+
+        n_remaining = self.cfg.epochs - self.epoch
+        per_epoch = (self.epoch_eval_end - self.start_time) / self.epoch
         per_epoch -= timedelta(microseconds=per_epoch.microseconds)
         eta = n_remaining * per_epoch
         self.misc_metrics.log_metric('eta', str(eta), reduction=None)
         self.misc_metrics.log_metric('time_per_epoch', str(per_epoch), reduction=None)
 
-
-        per_step = (self.epoch_train_end_time  - self.epoch_start_time) / self.n_train_batches
+        n_train_batches = self.misc_metrics.current_metrics['n_total_batches'].reduce().item()
+        per_step = (self.epoch_train_end - self.epoch_train_start) / n_train_batches
         per_step = per_step.total_seconds() * 1000
-        self.misc_metrics.log_metric('ms_per_step', per_step, reduction=None)
+        self.misc_metrics.log_metric('ms_per_batch', per_step, reduction=None)
 
         self.train_metrics.reduce()
         self.val_metrics.reduce()
         self.misc_metrics.reduce()
-        
+
         self.log_epoch()
         self.save_checkpoint()
         self.epoch += 1
 
-    def evaluate_epoch(self):
+    def evaluate_epoch(self, max_steps=None):
         self.pre_eval()
         self.switch_mode(train=False)
 
         for batch_idx, batch in enumerate(self.val_dl):
+            if max_steps and batch_idx >= max_steps:
+                break
+
             with torch.no_grad():
                 loss = self.forward_step(batch_idx, batch).item()
                 self.log_metric('loss', loss)
@@ -409,21 +455,25 @@ class BaseTrainer(TrainerInterface):
 
     def pre_training(self):
         log_delimiter()
-        hvd.barrier()
         print_worker('READY')
-        hvd.barrier()
         self.start_time = datetime.now()
         logging.info('Starting training...')
 
     def post_training(self):
-        self.table.close()
+        if hvd.rank() == 0:
+            self.table.close()
         logging.info('Training finished.')
 
-    def train(self, max_steps=None):
+    def train(self, max_steps=None, use_checkpointing=True, use_wandb=True, print_diagnostics=True):
+        if not self.initialized:
+            self.setup_all(
+                use_checkpointing=use_checkpointing, use_wandb=use_wandb, print_diagnostics=print_diagnostics
+            )
+
         self.pre_training()
         while self.epoch <= self.cfg.epochs:
             self.train_epoch(max_steps)
-            self.evaluate_epoch()
+            self.evaluate_epoch(max_steps)
         self.post_training()
 
     def log_metric(self, name, value, reduction=hvd.Average, allreduce=True):
