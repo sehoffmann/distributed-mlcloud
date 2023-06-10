@@ -94,7 +94,7 @@ def log_diagnostics(device):
 def log_config(config):
     msg = 'CONFIG:\n'
     msg += json.dumps(config.dct, indent=4, cls=ExtendedJSONEncoder) + '\n'
-    msg += delimiter()
+    msg += delimiter(newline=False)
     logging.info(msg)
 
 
@@ -127,16 +127,3 @@ def global_grad_norm(parameters, norm_type=2.0):
         total_norm = torch.norm(torch.stack([norm.to(first_device) for norm in norms]), norm_type)
 
     return total_norm
-
-
-def scale_lr(base_lr, batch_size, base_batch_size, use_adasum, use_gpu):
-    scaled_lr = base_lr
-    if use_adasum and hvd.nccl_built() and use_gpu:
-        lr_scaling = hvd.local_size() # gpu adasum needs scaling by local size
-    elif use_adasum:
-        lr_scaling = 1.0  # cpu adasum doesn't need per_batch_scaling
-    else:
-        lr_scaling = hvd.size()
-    lr_scaling *= (batch_size / base_batch_size)
-    scaled_lr *= lr_scaling
-    return scaled_lr, lr_scaling

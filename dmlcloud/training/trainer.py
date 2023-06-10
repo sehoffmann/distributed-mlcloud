@@ -25,8 +25,8 @@ from .util import (
     setup_horovod,
     setup_logging,
     global_grad_norm,
-    scale_lr,
 )
+from .scaling import scale_param_group, scale_lr
 
 
 class TrainerInterface:
@@ -91,10 +91,27 @@ class BaseTrainer(TrainerInterface):
         self.val_metrics = MetricSaver()
         self.misc_metrics = MetricSaver()
         self.epoch = 1
+        self.mode = 'train'
 
     @property
     def use_checkpointing(self):
         return self.model_dir is not None
+
+    @property
+    def is_gpu(self):
+        return self.device.type == 'cuda'
+
+    @property
+    def is_root(self):
+        return hvd.rank() == 0
+    
+    @property
+    def is_train(self):
+        return self.mode == 'train'
+    
+    @property
+    def is_eval(self):
+        return not self.is_train
 
     def setup_all(self, use_checkpointing=True, use_wandb=True, print_diagnostics=True):
         if self.initialized:
@@ -135,7 +152,7 @@ class BaseTrainer(TrainerInterface):
         log_config(self.cfg)
 
     def setup_table(self):
-        if hvd.rank() != 0:
+        if not self.is_root:
             return
 
         columns = ['Epoch', 'ETA', 'train/loss', 'val/loss']
@@ -165,7 +182,7 @@ class BaseTrainer(TrainerInterface):
         torch.cuda.manual_seed(self.cfg.seed)
 
     def setup_wandb(self):
-        if hvd.rank() != 0:
+        if not self.is_root:
             return
 
         set_wandb_startup_timeout(600)
@@ -197,22 +214,16 @@ class BaseTrainer(TrainerInterface):
 
     def setup_optimizer(self):
         logging.info('Creating optimizer')
-        if self.cfg.scale_lr:
-            scaled_lr, lr_scaling = scale_lr(self.cfg.base_lr, self.cfg.batch_size, 32, self.cfg.adasum, use_gpu=self.device != torch.device('cpu'))
-        else:
-            scaled_lr, lr_scaling = self.cfg.base_lr, 1.0
-
-        logging.info(f'Base LR: {self.cfg.base_lr:.1e},  Scaled: {scaled_lr:.1e},  Rampup Epochs: {self.cfg.rampup_epochs}')
-
-        optimizer = self.create_optimizer(self.model.parameters(), scaled_lr)
+        optimizer = self.create_optimizer(self.model.parameters(), self.cfg.base_lr)
         self.optimizer = hvd.DistributedOptimizer(
             optimizer, named_parameters=self.model.named_parameters(), op=hvd.Adasum if self.cfg.adasum else hvd.Average
         )
+        lr_scale_factor = self.scale_optimizer(self.optimizer)
 
         schedulers = []
         if self.cfg.rampup_epochs:
             linear_warmup = LinearLR(
-                self.optimizer, start_factor=1 / lr_scaling, end_factor=1.0, total_iters=self.cfg.rampup_epochs
+                self.optimizer, start_factor=1 / lr_scale_factor, end_factor=1.0, total_iters=self.cfg.rampup_epochs
             )
             schedulers.append(linear_warmup)
 
@@ -224,6 +235,23 @@ class BaseTrainer(TrainerInterface):
 
         self.scheduler = ChainedScheduler(schedulers)
         self.scaler = GradScaler(enabled=self.cfg.mixed)
+
+    def scale_optimizer(self, optimizer):
+        use_gpu = self.device.type == 'cuda'
+        _, lr_scale_factor = scale_lr(optimizer.defaults['lr'], self.cfg.batch_size, self.cfg.base_batch_size, self.cfg.adasum, use_gpu)
+        logging.info(f'LR Scale Factor: {lr_scale_factor}')
+        logging.info('Param-Groups:')
+        for i, param_group in enumerate(optimizer.param_groups):
+            param_group_cpy = dict(param_group)
+            scaled_params = scale_param_group(param_group, self.cfg, use_gpu)
+            scaled_params_cpy = dict(scaled_params)
+            optimizer.param_groups[i] = scaled_params
+            del param_group_cpy['params']
+            del scaled_params_cpy['params']
+            logging.info(f'[P{i}] Pre-scaled: {param_group_cpy}')
+            logging.info(f'[P{i}] Scaled:     {scaled_params_cpy}')
+        log_delimiter()
+        return lr_scale_factor
 
     def load_state_dict(self, state_dict):
         self.epoch = state_dict['epoch']
@@ -269,7 +297,7 @@ class BaseTrainer(TrainerInterface):
             sys.exit(1)
 
     def save_checkpoint(self):
-        if hvd.rank() != 0 or not self.use_checkpointing:
+        if not self.is_root or not self.use_checkpointing:
             return
 
         checkpoint_path = self.model_dir / 'checkpoint.pt'
@@ -289,7 +317,7 @@ class BaseTrainer(TrainerInterface):
         return self.val_metrics.last['loss'] == min(self.val_metrics.get_metrics('loss'))
 
     def log_epoch(self):
-        if hvd.rank() != 0:
+        if not self.is_root:
             return
 
         self.table['train/loss'] = self.train_metrics.last['loss']
@@ -336,13 +364,11 @@ class BaseTrainer(TrainerInterface):
         if train:
             self.model.train()
             self.current_metrics = self.train_metrics
-            self.is_train = True
-            self.is_eval = False
+            self.mode = 'train'
         else:
             self.model.eval()
             self.current_metrics = self.val_metrics
-            self.is_train = False
-            self.is_eval = True
+            self.mode = 'eval'
 
     def pre_train(self):
         self.epoch_train_start = datetime.now()
@@ -355,7 +381,7 @@ class BaseTrainer(TrainerInterface):
         self.switch_mode(train=True)
 
         # Do this now, and not later, to immidiately show that a new epoch has started
-        if hvd.rank() == 0:
+        if self.is_root:
             self.table['Epoch'] = self.epoch
         
         if hasattr(self.train_dl, 'sampler') and hasattr(self.train_dl.sampler, 'set_epoch'):
@@ -460,7 +486,7 @@ class BaseTrainer(TrainerInterface):
         logging.info('Starting training...')
 
     def post_training(self):
-        if hvd.rank() == 0:
+        if self.is_root:
             self.table.close()
         logging.info('Training finished.')
 
