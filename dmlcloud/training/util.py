@@ -85,7 +85,7 @@ def log_diagnostics(device):
     msg += f'Gloo enabled: {hvd.gloo_enabled()}\n'
     msg += delimiter()
     msg += f'CUDA_VISIBLE_DEVICES = {os.environ.get("CUDA_VISIBLE_DEVICES")}\n'
-    msg += f'Device count: {torch.cuda.device_count()}\n'
+    msg += f'Device count: {torch.cuda.device_count()}'
     logging.info(msg)
     print_worker(f'Using {device}')
     log_delimiter()
@@ -102,6 +102,13 @@ def log_git():
     msg = f'Git Hash: {git_hash()}\n'
     msg += f'Git Diff:\n{git_diff()}\n'
     msg += delimiter()
+    logging.info(msg)
+
+def log_model(model):
+    n_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_non_trainable_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    msg = f'# trainable parameters:     {n_trainable_params/1e6:.1f}M\n'
+    msg += f'# non-trainable parameters: {n_non_trainable_params/1e6:.1f}M'
     logging.info(msg)
 
 

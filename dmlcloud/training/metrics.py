@@ -13,6 +13,7 @@ class Metric:
         self.reduction = reduction
         self.batch_values = []
         self.allreduce = allreduce
+        assert not allreduce or reduction is not None, 'Cannot allreduce without reduction'
 
     def _reduce(self, value, dim=None):
         if value.dim() == 0:
@@ -45,12 +46,15 @@ class Metric:
             tensor = self._reduce(tensor, dim=0)
             self.batch_values.append(tensor)
 
-    def reduce(self):
+    def reduce_locally(self):
         if self.reduction is None:
             return self.batch_values[0]
-
         tensor = torch.stack(self.batch_values)
         tensor = self._reduce(tensor, dim=0)
+        return tensor
+
+    def reduce(self):
+        tensor = self.reduce_locally()
         if self.allreduce:
             if self.reduction is Var:
                 return hvd.allreduce_(tensor, op=hvd.Average, name=f'metric/{self.name}')  # not properly bessel corrected, but close enough
@@ -93,6 +97,9 @@ class MetricSaver:
                 self.current_metrics[name] = Metric(name, reduction, allreduce)
             metric = self.current_metrics[name]
             metric.add_batch_value(value)
+
+    def log_python_object(self, name, value):
+        self.log_metric(name, value, reduction=None, allreduce=False)
 
     def scalar_metrics(self, with_epoch=False):
         scalars = []

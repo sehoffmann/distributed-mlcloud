@@ -21,6 +21,7 @@ from .util import (
     log_delimiter,
     log_diagnostics,
     log_git,
+    log_model,
     print_worker,
     setup_horovod,
     setup_logging,
@@ -70,16 +71,11 @@ class TrainerInterface:
         """
         raise NotImplementedError()
 
-    def metric_names(self):
-        """
-        Returns a list with custom metrics that are displayed during training.
-        """
-        return []
-
 
 class BaseTrainer(TrainerInterface):
-    def __init__(self, config):
+    def __init__(self, config, val_loss_name='loss'):
         self.cfg = config
+        self.val_loss_name = val_loss_name
         self.reset()
 
     def reset(self):
@@ -129,8 +125,6 @@ class BaseTrainer(TrainerInterface):
         if use_wandb:
             self.setup_wandb()
 
-        self.setup_table()
-
         if print_diagnostics:
             self.print_diagnositcs()
 
@@ -139,6 +133,11 @@ class BaseTrainer(TrainerInterface):
         self.setup_loss()
         self.setup_optimizer()
         self.resume_training()
+
+        if print_diagnostics:
+            log_config(self.cfg)
+
+        self.setup_table()
 
         hvd.broadcast_parameters(self.model.state_dict(), root_rank=0)
         hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
@@ -149,17 +148,11 @@ class BaseTrainer(TrainerInterface):
         log_delimiter()
         log_git()
         log_diagnostics(self.device)
-        log_config(self.cfg)
 
     def setup_table(self):
         if not self.is_root:
             return
-
-        columns = ['Epoch', 'ETA', 'train/loss', 'val/loss']
-        columns += self.metric_names()
-        columns += ['ms/batch']
-        columns += ['time/epoch']
-        self.table = ProgressTable(columns=columns, print_row_on_update=False)
+        self.table = ProgressTable(columns=self.metric_names(), print_row_on_update=False)
 
     def setup_general(self):
         if torch.cuda.is_available():
@@ -187,8 +180,9 @@ class BaseTrainer(TrainerInterface):
 
         set_wandb_startup_timeout(600)
         wandb.init(
-            project=self.cfg.project_name,
-            name=self.cfg.experiment_name,
+            project=self.cfg.wb_project,
+            name=self.cfg.wb_experiment,
+            tags=self.cfg.wb_tags,
             dir=self.model_dir,
             id=self.job_id,
             resume='must' if self.is_resumed else 'never',
@@ -208,6 +202,10 @@ class BaseTrainer(TrainerInterface):
     def setup_model(self):
         logging.info('Creating model')
         self.model = self.create_model().to(self.device)
+        log_model(self.model)
+        if self.is_root and self.use_checkpointing:
+            with open(self.model_dir / 'model.txt', 'w') as f:
+                f.write(str(self.model))
 
     def setup_loss(self):
         self.loss_fn = self.create_loss()
@@ -215,11 +213,11 @@ class BaseTrainer(TrainerInterface):
     def setup_optimizer(self):
         logging.info('Creating optimizer')
         optimizer = self.create_optimizer(self.model.parameters(), self.cfg.base_lr)
+        lr_scale_factor = self.scale_optimizer(optimizer)
         self.optimizer = hvd.DistributedOptimizer(
             optimizer, named_parameters=self.model.named_parameters(), op=hvd.Adasum if self.cfg.adasum else hvd.Average
         )
-        lr_scale_factor = self.scale_optimizer(self.optimizer)
-
+        
         schedulers = []
         if self.cfg.rampup_epochs:
             linear_warmup = LinearLR(
@@ -314,25 +312,30 @@ class BaseTrainer(TrainerInterface):
         self.misc_metrics.scalars_to_csv(self.model_dir / 'misc_metrics.csv')
 
     def is_best_epoch(self):
-        return self.val_metrics.last['loss'] == min(self.val_metrics.get_metrics('loss'))
+        best_val_loss = min(self.val_metrics.get_metrics(self.val_loss_name))
+        return self.val_metrics.last[self.val_loss_name] == best_val_loss
 
     def log_epoch(self):
         if not self.is_root:
             return
 
-        self.table['train/loss'] = self.train_metrics.last['loss']
-        self.table['val/loss'] = self.val_metrics.last['loss']
-        self.table['ETA'] = str(self.misc_metrics.last['eta'])
-        self.table['ms/batch'] = f'{self.misc_metrics.last["ms_per_batch"]:.1f}'
-        self.table['time/epoch'] = str(self.misc_metrics.last['time_per_epoch'])
-
         for metric in self.metric_names():
             splits = metric.split('/', 1)
-            if len(splits) == 2:
-                current_metrics = self.train_metrics if splits[0] == 'train' else self.val_metrics
-                self.table[metric] = current_metrics.last[splits[1]]
+            if metric == 'Epoch':
+                continue
+            elif metric == 'ETA':
+                self.table[metric] = str(self.misc_metrics.last['eta'])
+            elif metric == 'ms/batch':
+                self.table[metric] = f'{self.misc_metrics.last["ms_per_batch"]:.1f}'
+            elif metric == 'time/epoch':
+                self.table[metric] = str(self.misc_metrics.last['time_per_epoch'])            
+            elif len(splits) == 2:
+                group, key = splits[0], splits[1]
+                metrics = self.train_metrics if group == 'train' else self.val_metrics
+                if key in metrics.last:
+                    self.table[metric] = metrics.last[key]
             else:
-                self.table[metric] = self.train_metrics.last[metric]
+                raise ValueError(f'Invalid metric name: {metric}')
 
         self.table.next_row()
 
@@ -381,7 +384,7 @@ class BaseTrainer(TrainerInterface):
         self.switch_mode(train=True)
 
         # Do this now, and not later, to immidiately show that a new epoch has started
-        if self.is_root:
+        if self.is_root and 'Epoch' in self.table.columns:
             self.table['Epoch'] = self.epoch
         
         if hasattr(self.train_dl, 'sampler') and hasattr(self.train_dl.sampler, 'set_epoch'):
@@ -430,9 +433,9 @@ class BaseTrainer(TrainerInterface):
             self.misc_metrics.log_metric('n_steps', 1, hvd.Sum, allreduce=False)
             self.misc_metrics.log_metric('n_total_batches', 1, hvd.Sum, allreduce=True)
 
-        self.misc_metrics.log_metric('lr', self.scheduler.get_last_lr()[0], reduction=None)
+        self.misc_metrics.log_python_object('lr', self.scheduler.get_last_lr()[0])
         for k, v in self.scaler.state_dict().items():
-            self.misc_metrics.log_metric(f'scaler/{k}', v, reduction=None)
+            self.misc_metrics.log_python_object(f'scaler/{k}', v)
 
         if self.scheduler is not None:
             self.scheduler.step()
@@ -449,38 +452,40 @@ class BaseTrainer(TrainerInterface):
         per_epoch = (self.epoch_eval_end - self.start_time) / self.epoch
         per_epoch -= timedelta(microseconds=per_epoch.microseconds)
         eta = n_remaining * per_epoch
-        self.misc_metrics.log_metric('eta', str(eta), reduction=None)
-        self.misc_metrics.log_metric('time_per_epoch', str(per_epoch), reduction=None)
+        self.misc_metrics.log_python_object('eta', str(eta))
+        self.misc_metrics.log_python_object('time_per_epoch', str(per_epoch))
 
         n_train_batches = self.misc_metrics.current_metrics['n_total_batches'].reduce().item()
         per_step = (self.epoch_train_end - self.epoch_train_start) / n_train_batches
         per_step = per_step.total_seconds() * 1000
-        self.misc_metrics.log_metric('ms_per_batch', per_step, reduction=None)
+        self.misc_metrics.log_python_object('ms_per_batch', per_step)
 
-        self.train_metrics.reduce()
-        self.val_metrics.reduce()
-        self.misc_metrics.reduce()
-
+        self.reduce_metrics()
         self.log_epoch()
         self.save_checkpoint()
         self.epoch += 1
+
+    def reduce_metrics(self):
+        self.train_metrics.reduce()
+        self.val_metrics.reduce()
+        self.misc_metrics.reduce()
 
     def evaluate_epoch(self, max_steps=None):
         self.pre_eval()
         self.switch_mode(train=False)
 
-        for batch_idx, batch in enumerate(self.val_dl):
-            if max_steps and batch_idx >= max_steps:
-                break
+        if self.val_dl is not None:
+            for batch_idx, batch in enumerate(self.val_dl):
+                if max_steps and batch_idx >= max_steps:
+                    break
 
-            with torch.no_grad():
-                loss = self.forward_step(batch_idx, batch).item()
-                self.log_metric('loss', loss)
+                with torch.no_grad():
+                    loss = self.forward_step(batch_idx, batch).item()
+                    self.log_metric('loss', loss)
 
         self.post_eval()
 
     def pre_training(self):
-        log_delimiter()
         print_worker('READY')
         self.start_time = datetime.now()
         logging.info('Starting training...')
@@ -504,3 +509,16 @@ class BaseTrainer(TrainerInterface):
 
     def log_metric(self, name, value, reduction=hvd.Average, allreduce=True):
         self.current_metrics.log_metric(name, value, reduction, allreduce)
+
+    def log_python_object(self, name, value):
+        self.current_metrics.log_python_object(name, value, reduction=None, allreduce=False)
+
+    def metric_names(self):
+        """
+        Returns a list with custom metrics that are displayed during training.
+        """
+        columns = ['Epoch', 'ETA', 'train/loss']
+        if self.val_dl is not None:
+            columns += [f'val/{self.val_loss_name}']
+        columns += ['ms/batch', 'time/epoch']
+        return columns

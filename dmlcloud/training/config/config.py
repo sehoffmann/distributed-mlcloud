@@ -2,7 +2,7 @@ import argparse
 
 from .meta import MetaConfig
 from .training import TrainingConfig
-
+from .wandb import WandbConfig
 
 class BaseConfig:
     def __init__(self, dct=None):
@@ -39,7 +39,7 @@ class BaseConfig:
 
     def set_sub_config(self, key, cls):
         self.dct.setdefault(key, {})
-        sub_cfg = cls(self.dct, key)
+        sub_cfg = cls(self, self.dct, key)
         self._sub_configs.append(sub_cfg)
 
     def create_parser(self, parser=None):
@@ -61,3 +61,4 @@ class DefaultConfig(BaseConfig):
     def _setup_sub_configs(self):
         self.set_sub_config('meta', MetaConfig)
         self.set_sub_config('training', TrainingConfig)
+        self.set_sub_config('wandb', WandbConfig)
